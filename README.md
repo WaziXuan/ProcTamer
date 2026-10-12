@@ -52,6 +52,7 @@ Windows 上的一个小工具：按进程名压低后台程序的 CPU / 硬盘�
 | 注册表优先级 | 让系统在进程**启动时**直接给低优先级，用于会拒绝访问的受保护进程 | 需要 | 是 |
 | 限上传（系统 QoS） | 用 Windows 策略式 QoS 按程序名限速 | 需要 | **否** |
 | 限上传（本机中转） | 代理把该进程的 TCP 转给 ProcTamer，用令牌桶限上传，下载不限 | 不需要 | 是 |
+| 同步到 Clash | 把要限速的进程名单自动写进 Clash Verge 的全局扩展脚本，增减进程后自动更新 | 不需要 | 是 |
 | 状态显示 | 每条规则是否生效、进程是否在运行、中转连接数 / 速率 / 累计量 | — | — |
 | 托盘常驻、开机自启 | 关窗缩到托盘；可登记为登录时以管理员权限静默启动 | 自启需要 | — |
 
@@ -116,6 +117,7 @@ Windows 上的一个小工具：按进程名压低后台程序的 CPU / 硬盘�
 - **添加进程 / 删除**：增减规则。添加时可从正在运行的进程里选，也可直接输入程序名。
 - **暂停全部**：让所有规则临时失效。中转照常转发，只是不限速。
 - **开机自启**：登记一个登录时触发的计划任务，以管理员权限静默启动到托盘。
+- **同步到 Clash**：把限上传大于 0 的进程写进 Clash Verge 的全局扩展脚本，按钮高亮表示已开启。再点一次移除。详见 [TUN 模式下限上传](#tun-模式下限上传)。
 - **以管理员身份重启**：仅在非管理员运行时显示。
 - **托盘图标**：绿色 = 运行中，灰色 = 已暂停，橙色 = 非管理员。双击显示主窗口。
 - 点窗口的关闭按钮只是缩到托盘；托盘右键 **"退出并还原"** 才是真正退出。
@@ -150,15 +152,46 @@ ProcTamer 本机中转 127.0.0.1:17877 ── 令牌桶限上传
 物理网卡 → 互联网
 ```
 
-### Clash Verge：使用现成脚本
+### Clash Verge：点一下"同步到 Clash"（推荐）
 
-仓库里的 [`proctamer-relay.js`](proctamer-relay.js) 是给 Clash Verge 的**全局扩展脚本**用的，它在订阅原有内容的基础上追加节点、策略组和规则，不改动原有配置。
+1. 在 ProcTamer 工具栏点 **"同步到 Clash"**，确认。
+2. 到 Clash Verge 的订阅（Profiles）页，在当前订阅卡片上点一次"使用"，让它重新生成配置。
+
+之后在 ProcTamer 里添加 / 删除进程，或把某个进程的限速值在 0 和非 0 之间改动，脚本会自动更新，状态栏会提示"Clash 规则已更新"，这时再去点一次"使用"即可。只是勾选 / 取消"启用"、点"暂停全部"或调整限速数值，不需要动 Clash，立即生效。
+
+这个功能改的是 Clash Verge 的全局扩展脚本 `%APPDATA%\io.github.clash-verge-rev.clash-verge-rev\profiles\Script.js`，规则如下：
+
+- **只改两个标记之间的那一段**，脚本里别的内容原样保留：
+
+  ```js
+  // BEGIN PROCTAMER
+  // ……由 ProcTamer 自动维护的 procTamerRelay(config) 函数……
+  // END PROCTAMER
+
+  function main(config, profileName) {
+    config = procTamerRelay(config);   // ProcTamer 加的唯一一行调用
+    // 你自己的其他逻辑可以继续写在这里
+    return config;
+  }
+  ```
+
+- 第一次写入前会把原文件备份到上一级目录，文件名形如 `Script.js.bak-<时间>-proctamer`。
+- 脚本原本是空白模板（或旧版的独立 `proctamer-relay.js`）时，直接生成上面的结构；已经有你自己的内容时，把那一段加在最前面，并在你的 `main` 函数第一行补上那句调用。
+- 写进名单的是**所有限上传大于 0 的规则**，不管是否勾了"启用"。启用与否只决定中转里限不限速。
+- 再点一次"同步到 Clash"会移除那一段和那句调用，其余内容不动。
+- 找不到 Clash Verge 时按钮会提示，不做任何修改。
+
+### Clash Verge：手动使用现成脚本
+
+不想让 ProcTamer 改 Clash 的文件，可以手动安装。仓库里的 [`proctamer-relay.js`](proctamer-relay.js) 是给 Clash Verge 的**全局扩展脚本**用的独立版本，效果与自动生成的那一段完全相同。
 
 1. 打开 Clash Verge → 订阅（Profiles）页 → "全局扩展脚本"（Global Extend Script）。不同版本的菜单文字可能略有出入。
 2. 先把里面原有的内容复制出来留个备份，再用 `proctamer-relay.js` 的内容整体替换，保存。
 3. Clash Verge 会重新生成配置。没生效的话，在当前订阅卡片上再点一次"使用"。
 
-脚本为列表里的每个进程做三件事：
+### 脚本做了什么
+
+脚本（两种方式相同）在订阅原有内容的基础上追加节点、策略组和规则，不改动原有配置。它为列表里的每个进程做三件事：
 
 | 追加的内容 | 名称 | 说明 |
 |---|---|---|
@@ -170,7 +203,7 @@ ProcTamer 本机中转 127.0.0.1:17877 ── 令牌桶限上传
 
 因为策略组是 `fallback`，**ProcTamer 没运行时健康检查会失败，流量自动走直连**，不会断网。
 
-要增减进程，改脚本开头的 `PROCESSES` 数组，并在 ProcTamer 里添加同名规则：
+手动安装时，要增减进程得自己改脚本开头的 `PROCESSES` 数组，并在 ProcTamer 里添加同名规则（用"同步到 Clash"则不需要）：
 
 ```js
 const PROCESSES = [
@@ -216,7 +249,9 @@ rules:
 
 ### 撤销
 
-把全局扩展脚本恢复成默认内容并保存：
+用"同步到 Clash"装的：再点一次这个按钮，然后到 Clash Verge 点一次"使用"。
+
+手动装的：把全局扩展脚本恢复成默认内容并保存：
 
 ```js
 // Define main function (script entry)
@@ -332,7 +367,8 @@ curl.exe --socks5-hostname 127.0.0.1:17877 --proxy-user "5EClient.exe:x" http://
 - **经中转的进程一律直连出网。** 这些进程的 TCP 由 ProcTamer 直接发出，不再按代理订阅里的域名规则分流。原本会走代理节点的连接也会变成直连。
 - **退出时有短暂空窗。** ProcTamer 退出后到代理下一次健康检查之间（最长约 30 秒），这些进程的新连接会失败，之后自动回落直连；退出时已建立的中转连接会断开。
 - **健康检查会留下痕迹。** 代理每 30 秒检查一次中转是否可用，状态列里会偶尔出现 1 个连接和少量累计流量，这是正常的。
-- **进程列表不联动。** 代理脚本里的进程列表和 ProcTamer 的规则表是两份，新增进程要两边都改。
+- **改了名单要让 Clash 重新加载。** 用"同步到 Clash"时脚本会自动更新，但 Clash Verge 只在重新生成配置时才读脚本，仍需手动点一次"使用"。手动安装脚本的话，进程名单要两边都改。
+- **"同步到 Clash"只认 Clash Verge。** 它按固定路径找 Clash Verge 的全局扩展脚本，其他客户端请手写配置。进程名里带逗号或括号的不会写进名单（规则语法不允许）。
 - **注册表优先级不即时生效。** 只对之后启动的进程有效，要在启动游戏前设置好。
 - **异常退出不会还原。** 程序被强制结束或系统崩溃时来不及清理：QoS 策略重启后自动消失；注册表项会保留，下次启动 ProcTamer 时按配置重新同步。
 - **系统 QoS 在部分家用环境下可能不生效。** 这是 Windows 策略式 QoS 本身的特性，状态列显示 `限速✔` 只代表策略已建立，是否真的压住了上行请用资源监视器确认。
@@ -355,8 +391,8 @@ curl.exe --socks5-hostname 127.0.0.1:17877 --proxy-user "5EClient.exe:x" http://
 卸载：
 
 1. 如果开过"开机自启"，先在程序里点一次把它关掉（或在任务计划程序里删除名为 `ProcTamer` 的任务）；
-2. 退出并还原；
-3. 把代理里的全局扩展脚本恢复成默认内容；
+2. 如果用过"同步到 Clash"，再点一次把那一段移除（手动装的脚本则自己恢复成默认内容），并到 Clash Verge 点一次"使用"；
+3. 退出并还原；
 4. 删除程序所在目录。
 
 手动检查是否有残留（管理员 PowerShell）：
@@ -379,7 +415,7 @@ Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Exe
 | `ProcTamer.cs` | 全部源码，单文件 |
 | `app.manifest` | 清单：普通权限启动、DPI 感知、新版控件样式 |
 | `build.cmd` | 一键构建脚本 |
-| `proctamer-relay.js` | Clash Verge 全局扩展脚本 |
+| `proctamer-relay.js` | Clash Verge 全局扩展脚本的独立版本，供手动安装 |
 | `rules.tsv` | 运行后自动生成的配置文件（不在仓库里） |
 
 ### 构建
@@ -423,6 +459,7 @@ Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Exe
 | `--wait` | 等待上一个实例退出后再启动（提权重启时内部使用） |
 | `--shot <png路径>` | 调试用：启动后把窗口画成图片保存并退出，不占用单实例锁 |
 | `--shot-after <毫秒>` | 配合 `--shot`，指定多久之后截图，默认 1500。不要和 `--tray` 同用 |
+| `--clash-dir <目录>` | 指定 Clash Verge 的数据目录（里面要有 `profiles\Script.js`），默认是 `%APPDATA%\io.github.clash-verge-rev.clash-verge-rev`。`--shot` 模式下不指定就不碰 Clash 的文件 |
 
 ## License
 

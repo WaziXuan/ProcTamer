@@ -11,6 +11,7 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -411,6 +412,185 @@ namespace ProcTamer
         }
     }
 
+    // 把要经中转限速的进程名单写进 Clash Verge 的全局扩展脚本（profiles\Script.js）。
+    // 只改 BEGIN / END 两个标记之间的那一段，脚本里别的内容不动
+    static class ClashSync
+    {
+        const string Begin = "// BEGIN PROCTAMER";
+        const string End = "// END PROCTAMER";
+        const string Call = "config = procTamerRelay(config);";
+        static readonly Regex MainHead = new Regex(@"function\s+main\s*\([^)]*\)\s*\{");
+
+        public static string Dir;   // Clash Verge 的数据目录，找不到则为 null
+
+        public static void Locate(string forced)
+        {
+            string d = forced ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "io.github.clash-verge-rev.clash-verge-rev");
+            Dir = File.Exists(Path.Combine(d, "profiles", "Script.js")) ? d : null;
+        }
+
+        static string ScriptPath { get { return Path.Combine(Dir, "profiles", "Script.js"); } }
+
+        public static bool Installed()
+        {
+            if (Dir == null) return false;
+            try
+            {
+                string t = File.ReadAllText(ScriptPath);
+                int b = t.IndexOf(Begin);
+                return b >= 0 && t.IndexOf(End) > b;
+            }
+            catch { return false; }
+        }
+
+        // 脚本比 Clash 当前的运行配置新，说明 Clash 还没重新加载
+        public static bool Pending()
+        {
+            try
+            {
+                string runtime = Path.Combine(Dir, "clash-verge.yaml");
+                return File.Exists(runtime) &&
+                    File.GetLastWriteTimeUtc(ScriptPath) > File.GetLastWriteTimeUtc(runtime);
+            }
+            catch { return false; }
+        }
+
+        // 写入或更新自己那一段。返回 null 表示成功（包括内容没变、无需写入），否则是失败原因
+        public static string Write(List<string> names)
+        {
+            try
+            {
+                string path = ScriptPath;
+                string old = File.ReadAllText(path);
+                string nl = old.Contains("\r\n") ? "\r\n" : "\n";
+                string block = Block(names).Replace("\n", nl);
+                int b = old.IndexOf(Begin), e = old.IndexOf(End);
+                bool had = b >= 0 && e > b;
+                string text;
+                if (had) text = old.Substring(0, b) + block + old.Substring(e + End.Length);
+                else if (Replaceable(old))
+                    text = block + nl + nl + "function main(config, profileName) {" + nl +
+                        "  " + Call + nl + "  return config;" + nl + "}" + nl;
+                else text = block + nl + nl + old;
+
+                // main 里得有一句调用，没有就补在函数体的第一行
+                if (!text.Replace(block, "").Contains("procTamerRelay("))
+                {
+                    Match m = MainHead.Match(text);
+                    if (!m.Success) return "脚本里没找到 main 函数";
+                    text = text.Insert(m.Index + m.Length, nl + "  " + Call);
+                }
+                if (text == old) return null;
+                if (!had)
+                    File.Copy(path, Path.Combine(Dir, "Script.js.bak-" +
+                        DateTime.Now.ToString("yyyyMMddHHmmss") + "-proctamer"), true);
+                File.WriteAllText(path, text, new UTF8Encoding(false));
+                return null;
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
+
+        // 去掉自己那一段和 main 里的调用，其余内容保留
+        public static string Remove()
+        {
+            try
+            {
+                string path = ScriptPath;
+                string old = File.ReadAllText(path);
+                int b = old.IndexOf(Begin), e = old.IndexOf(End);
+                if (b < 0 || e < b) return null;
+                string text = old.Substring(0, b) + old.Substring(e + End.Length);
+                text = Regex.Replace(text, @"[ \t]*(config\s*=\s*)?procTamerRelay\s*\(\s*config\s*\)\s*;?[ \t]*\r?\n", "");
+                File.WriteAllText(path, text.TrimStart('\r', '\n'), new UTF8Encoding(false));
+                return null;
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
+
+        // 整个文件可以直接换掉的两种情况：Clash Verge 的空白模板，或旧版独立的 proctamer-relay.js
+        static bool Replaceable(string text)
+        {
+            if (text.Contains("\"ProcTamer-Relay \"") && text.Contains("RELAY_PORT")) return true;
+            string bare = Regex.Replace(Regex.Replace(text, @"//[^\n]*", ""), @"\s+", "");
+            return bare == "functionmain(config,profileName){returnconfig;}" ||
+                   bare == "functionmain(config){returnconfig;}";
+        }
+
+        static string Block(List<string> names)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append(Begin).Append("\n");
+            sb.Append("// Maintained by ProcTamer: everything between the two markers is rewritten\n");
+            sb.Append("// automatically. Change the process list in ProcTamer, not here.\n");
+            sb.Append("function procTamerRelay(config) {\n");
+            if (names.Count == 0) sb.Append("  const PROCESSES = [];\n");
+            else
+            {
+                sb.Append("  const PROCESSES = [\n");
+                for (int i = 0; i < names.Count; i++)
+                    sb.Append("    \"").Append(names[i].Replace("\\", "\\\\").Replace("\"", "\\\""))
+                      .Append(i < names.Count - 1 ? "\",\n" : "\"\n");
+                sb.Append("  ];\n");
+            }
+            sb.Append(Body.Replace("\r\n", "\n"));
+            sb.Append(End);
+            return sb.ToString();
+        }
+
+        const string Body = @"  const RELAY_SERVER = ""127.0.0.1"";
+  const RELAY_PORT = 17877;
+  const CHECK_URL = ""http://www.msftconnecttest.com/connecttest.txt"";
+
+  const relayProxies = [];
+  const relayGroups = [];
+  // ProcTamer's own outbound connections must never be routed back into the relay.
+  const relayRules = [""PROCESS-NAME,ProcTamer.exe,DIRECT""];
+
+  PROCESSES.forEach((exe) => {
+    const proxyName = ""ProcTamer-Relay "" + exe;
+    const groupName = ""ProcTamer "" + exe;
+    relayProxies.push({
+      name: proxyName,
+      type: ""socks5"",
+      server: RELAY_SERVER,
+      port: RELAY_PORT,
+      username: exe,
+      password: ""proctamer"",
+      udp: false
+    });
+    relayGroups.push({
+      name: groupName,
+      type: ""fallback"",
+      proxies: [proxyName, ""DIRECT""],
+      url: CHECK_URL,
+      interval: 30,
+      timeout: 3000,
+      lazy: false
+    });
+    relayRules.push(""AND,((PROCESS-NAME,"" + exe + ""),(NETWORK,TCP)),"" + groupName);
+  });
+
+  const proxyNames = relayProxies.map((item) => item.name);
+  const groupNames = relayGroups.map((item) => item.name);
+  const oldProxies = Array.isArray(config.proxies) ? config.proxies : [];
+  const oldGroups = Array.isArray(config[""proxy-groups""]) ? config[""proxy-groups""] : [];
+  const oldRules = Array.isArray(config.rules) ? config.rules : [];
+
+  config.proxies = oldProxies
+    .filter((item) => !item || !proxyNames.includes(item.name))
+    .concat(relayProxies);
+  config[""proxy-groups""] = oldGroups
+    .filter((item) => !item || !groupNames.includes(item.name))
+    .concat(relayGroups);
+  config.rules = relayRules.concat(oldRules.filter((item) => !relayRules.includes(item)));
+
+  return config;
+}
+";
+    }
+
     class AddDialog : Form
     {
         ComboBox box;
@@ -488,23 +668,27 @@ namespace ProcTamer
         readonly object psLock = new object();
         readonly Relay relay = new Relay();
         readonly Stopwatch relayClock = Stopwatch.StartNew();
+        bool clashOn;
+        string clashError;
 
         bool paused;
         bool loading;
         bool reallyExit;
 
         DataGridView grid;
-        ToolStripButton btnPause, btnAuto, btnElevate;
+        ToolStripButton btnPause, btnAuto, btnClash, btnElevate;
         ToolStripStatusLabel lblStatus;
         NotifyIcon tray;
         ToolStripMenuItem miPause;
         System.Windows.Forms.Timer timer;
         Icon icoOn, icoPaused, icoLimited;
 
-        public MainForm(bool hidden, string shot, int shotDelay)
+        public MainForm(bool hidden, string shot, int shotDelay, string clashDir)
         {
             startHidden = hidden;
             shotPath = shot;
+            // 截图调试模式不碰真实的 Clash 配置，除非另外指定了目录
+            if (shot == null || clashDir != null) ClashSync.Locate(clashDir);
             configPath = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "rules.tsv");
             isAdmin = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
             if (isAdmin) { try { Process.EnterDebugMode(); } catch { } }
@@ -572,11 +756,14 @@ namespace ProcTamer
             btnAuto = TextButton("开机自启");
             btnAuto.ToolTipText = "登录后以管理员权限静默启动到托盘";
             btnAuto.Click += delegate { ToggleAutostart(); };
+            btnClash = TextButton("同步到 Clash");
+            btnClash.ToolTipText = "把限上传大于 0 的进程写进 Clash Verge 全局扩展脚本里 ProcTamer 自己的那一段，之后规则变化会自动更新；再点一次移除";
+            btnClash.Click += delegate { ToggleClash(); };
             btnElevate = TextButton("以管理员身份重启");
             btnElevate.Visible = !isAdmin;
             btnElevate.Click += delegate { RestartElevated(); };
             bar.Items.AddRange(new ToolStripItem[] {
-                add, del, new ToolStripSeparator(), btnPause, new ToolStripSeparator(), btnAuto, btnElevate });
+                add, del, new ToolStripSeparator(), btnPause, new ToolStripSeparator(), btnAuto, btnClash, btnElevate });
 
             grid = new DataGridView();
             grid.Dock = DockStyle.Fill;
@@ -857,7 +1044,53 @@ namespace ProcTamer
             SyncIfeo();
             SyncQos();
             SyncRelay();
+            SyncClash();
             Tick();
+        }
+
+        // 要让 Clash 转给中转的进程：所有填了限速值的规则，不管当前是否启用。
+        // 启用和暂停只影响中转里限不限速，这样开关规则不用每次都让 Clash 重新加载
+        List<string> RelayNames()
+        {
+            List<string> names = new List<string>();
+            foreach (Rule r in rules)
+                if (r.Kbps > 0 && r.Name.IndexOfAny(new char[] { ',', '(', ')' }) < 0 &&
+                    !names.Contains(r.Name, StringComparer.OrdinalIgnoreCase))
+                    names.Add(r.Name);
+            return names;
+        }
+
+        void SyncClash()
+        {
+            clashOn = ClashSync.Installed();
+            clashError = clashOn ? ClashSync.Write(RelayNames()) : null;
+        }
+
+        void ToggleClash()
+        {
+            if (ClashSync.Dir == null)
+            {
+                MessageBox.Show(this, "没找到 Clash Verge 的全局扩展脚本（profiles\\Script.js），可能没装 Clash Verge。\n" +
+                    "用别的代理软件时，请参考 proctamer-relay.js 手动配置。", AppName);
+                return;
+            }
+            string err;
+            if (!ClashSync.Installed())
+            {
+                if (MessageBox.Show(this, "把限上传大于 0 的进程写进 Clash Verge 的全局扩展脚本？\n\n" +
+                        "只会增加和维护 ProcTamer 自己的那一段，脚本里别的内容不动；原文件会先备份。\n" +
+                        "之后在这里增减进程或改限速值，那一段会自动更新。", AppName,
+                        MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+                err = ClashSync.Write(RelayNames());
+            }
+            else
+            {
+                if (MessageBox.Show(this, "从 Clash Verge 的全局扩展脚本里移除 ProcTamer 的那一段？", AppName,
+                        MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+                err = ClashSync.Remove();
+            }
+            if (err != null) MessageBox.Show(this, "写入失败：" + err, AppName);
+            ApplyAll(false);
         }
 
         // 规则停用或暂停时中转照常转发，只是不限速
@@ -1104,9 +1337,18 @@ namespace ProcTamer
 
             string state = paused ? "已暂停" : activeCount + " 条规则生效中";
             btnPause.Text = paused ? "恢复全部" : "暂停全部";
+            btnClash.Checked = clashOn;
             miPause.Text = btnPause.Text;
             if (limiting && relay.Error != null)
                 lblStatus.Text = state + "    限速中转未启动（127.0.0.1:" + Relay.Port + " 监听失败：" + relay.Error + "）";
+            else if (clashError != null)
+                lblStatus.Text = state + "    Clash 脚本写入失败：" + clashError;
+            else if (clashOn && ClashSync.Pending())
+                lblStatus.Text = state + "    Clash 规则已更新：到 Clash Verge 订阅页对当前订阅点一次“使用”后生效";
+            else if (limiting && tunnel != null && clashOn)
+                lblStatus.Text = state + "    检测到代理 TUN 模式：限上传由本机中转 127.0.0.1:" + Relay.Port + " 执行，Clash 规则已同步";
+            else if (limiting && tunnel != null && ClashSync.Dir != null)
+                lblStatus.Text = state + "    检测到代理 TUN 模式：点“同步到 Clash”，让 Clash 把限速进程的 TCP 转给本机中转";
             else if (limiting && tunnel != null)
                 lblStatus.Text = state + "    检测到代理 TUN 模式：限上传由本机中转 127.0.0.1:" + Relay.Port +
                     " 执行，需要代理软件把这些进程的 TCP 转过来";
@@ -1189,6 +1431,9 @@ namespace ProcTamer
             string shot = null;
             int si = Array.IndexOf(args, "--shot");
             if (si >= 0 && si + 1 < args.Length) shot = args[si + 1];
+            string clashDir = null;
+            int ci = Array.IndexOf(args, "--clash-dir");
+            if (ci >= 0 && ci + 1 < args.Length) clashDir = args[ci + 1];
             int shotDelay = 1500;
             int di = Array.IndexOf(args, "--shot-after");
             if (di >= 0 && di + 1 < args.Length) int.TryParse(args[di + 1], out shotDelay);
@@ -1213,7 +1458,7 @@ namespace ProcTamer
                 }
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new MainForm(hidden, shot, shotDelay));
+                Application.Run(new MainForm(hidden, shot, shotDelay, clashDir));
                 mutex.ReleaseMutex();
             }
         }
