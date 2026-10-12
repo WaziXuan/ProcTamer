@@ -1,0 +1,5 @@
+# Build output
+*.exe
+
+# Per-machine rule configuration, generated at runtime
+rules.tsv

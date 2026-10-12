@@ -1,0 +1,7 @@
+* text=auto
+# cmd.exe misparses LF-only batch files that contain non-ASCII comments
+*.cmd text eol=crlf
+*.cs text eol=lf
+*.js text eol=lf
+*.md text eol=lf
+*.png binary
