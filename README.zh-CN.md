@@ -6,7 +6,7 @@ ProcTamer 是一款 Windows 托盘工具，用于按进程名称约束后台程�
 
 本程序的主要特点是：**在代理软件开启 TUN 模式时，仍可按进程限制上传速率**（需配合 Clash Verge / mihomo）。此场景下，Windows 自带的按进程限速手段均不生效。
 
-- 单个可执行文件，约 68 KB；不安装驱动，不注入其他进程，不挂起或结束任何进程
+- 单个可执行文件，约 120 KB；不安装驱动，不注入其他进程，不挂起或结束任何进程
 - 仅调用 Windows 自带功能；使用系统自带编译器即可从源码构建，无需安装开发环境
 - 退出时撤销本程序所做的全部更改
 
@@ -539,6 +539,7 @@ Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Exe
 |---|---|
 | `ProcTamer.cs` | 全部源码，单文件 |
 | `app.manifest` | 应用清单：普通权限启动、DPI 感知、新版控件样式 |
+| `app.ico` | 程序图标，构建时嵌入可执行文件 |
 | `build.cmd` | 一键构建脚本 |
 | `proctamer-relay.js` | Clash Verge 全局扩展脚本的独立版本，供手动安装 |
 | `rules.tsv` | 运行后自动生成的规则文件（不纳入仓库） |
@@ -549,7 +550,7 @@ Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Exe
 
 ```bat
 "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /platform:x64 ^
-  /codepage:65001 /win32manifest:app.manifest /out:ProcTamer.exe ^
+  /codepage:65001 /win32manifest:app.manifest /win32icon:app.ico /out:ProcTamer.exe ^
   /r:System.dll,System.Core.dll,System.Drawing.dll,System.Windows.Forms.dll ProcTamer.cs
 ```
 

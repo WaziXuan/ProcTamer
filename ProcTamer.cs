@@ -9,6 +9,7 @@ using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -17,6 +18,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
+
+[assembly: AssemblyTitle("ProcTamer")]
+[assembly: AssemblyDescription("Per-process priority tamer and upload limiter")]
+[assembly: AssemblyProduct("ProcTamer")]
+[assembly: AssemblyCopyright("Copyright (c) 2026 WaziXuan. MIT License.")]
+[assembly: AssemblyVersion("0.1.0.0")]
+[assembly: AssemblyFileVersion("0.1.0.0")]
 
 namespace ProcTamer
 {

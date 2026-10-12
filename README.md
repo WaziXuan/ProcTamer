@@ -6,7 +6,7 @@ ProcTamer is a Windows tray utility that restrains background programs by proces
 
 Its distinguishing feature: **the per-process upload limit keeps working while a proxy runs in TUN mode** (with Clash Verge / mihomo). In that situation none of the per-process rate limiting mechanisms built into Windows have any effect.
 
-- A single executable of about 68 KB. No driver, no injection into other processes, and it never suspends or terminates anything
+- A single executable of about 120 KB. No driver, no injection into other processes, and it never suspends or terminates anything
 - Uses only facilities that ship with Windows; builds from source with the compiler that is already on the system, no development environment required
 - Reverts every change it made when it exits
 
@@ -539,6 +539,7 @@ If none of the three commands prints anything, nothing is left behind.
 |---|---|
 | `ProcTamer.cs` | All of the source code, in one file |
 | `app.manifest` | Application manifest: starts with standard rights, DPI aware, modern control styles |
+| `app.ico` | Application icon, embedded into the executable at build time |
 | `build.cmd` | One-step build script |
 | `proctamer-relay.js` | Standalone version of the Clash Verge global script, for manual installation |
 | `rules.tsv` | Rule file generated at run time (not in the repository) |
@@ -549,7 +550,7 @@ If none of the three commands prints anything, nothing is left behind.
 
 ```bat
 "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /platform:x64 ^
-  /codepage:65001 /win32manifest:app.manifest /out:ProcTamer.exe ^
+  /codepage:65001 /win32manifest:app.manifest /win32icon:app.ico /out:ProcTamer.exe ^
   /r:System.dll,System.Core.dll,System.Drawing.dll,System.Windows.Forms.dll ProcTamer.cs
 ```
 
