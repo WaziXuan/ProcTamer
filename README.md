@@ -1,239 +1,343 @@
 # ProcTamer
 
-Windows 上的一个小工具：按进程名压低后台程序的 CPU / 硬盘优先级，并限制它的上传速度。
+**English** | [简体中文](README.zh-CN.md)
 
-它是为打游戏时的两类后台干扰写的：反作弊程序在后台扫盘抢资源，对战平台周期性上传数据挤占上行带宽。**开着代理 TUN 模式时也能按进程限上传**（配合 Clash Verge / mihomo），这是系统自带手段做不到的。
+ProcTamer is a Windows tray utility that restrains background programs by process name: it lowers their CPU and disk priority and caps their upload rate.
 
-- 单个 exe，约 46 KB，不装驱动、不注入、不挂起进程
-- 只用 Windows 自带功能，用系统自带的编译器就能从源码构建，不需要装任何开发环境
-- 退出时把改过的东西全部还原
+Its distinguishing feature: **the per-process upload limit keeps working while a proxy runs in TUN mode** (with Clash Verge / mihomo). In that situation none of the per-process rate limiting mechanisms built into Windows have any effect.
 
-![主界面：两条规则正在经中转限速](docs/screenshot.png)
+- A single executable of about 60 KB. No driver, no injection into other processes, and it never suspends or terminates anything
+- Uses only facilities that ship with Windows; builds from source with the compiler that is already on the system, no development environment required
+- Reverts every change it made when it exits
 
-*上图是演示：`curl.exe` 被限在 100 KB/s，另一个进程被限在 50 KB/s，状态列实时显示连接数、上传速率和累计量。*
+![Main window: two rules being rate limited through the relay](docs/screenshot.png)
 
----
+*A demonstration: two processes are capped at 100 KB/s and 50 KB/s. The status column shows the live connection count, upload rate and running total.*
 
-## 目录
-
-- [它解决什么问题](#它解决什么问题)
-- [功能一览](#功能一览)
-- [快速开始](#快速开始)
-- [界面说明](#界面说明)
-- [TUN 模式下限上传](#tun-模式下限上传)
-- [工作原理](#工作原理)
-- [验证是否生效](#验证是否生效)
-- [实测数据](#实测数据)
-- [已知限制](#已知限制)
-- [风险提示](#风险提示)
-- [退出、还原与卸载](#退出还原与卸载)
-- [从源码构建与修改](#从源码构建与修改)
-- [License](#license)
+> **Note on language.** The user interface is in Simplified Chinese only. Section 4 gives an English key for every label.
 
 ---
 
-## 它解决什么问题
+## Contents
 
-| 现象 | 原因 | ProcTamer 的做法 |
-|---|---|---|
-| 对局中突然卡一下、掉帧 | 反作弊（如腾讯 ACE 的 `SGuard64.exe`）在后台扫描硬盘，和游戏抢 CPU 与磁盘 | 把它降到最低 CPU 优先级、最低 I/O 优先级，游戏优先用 |
-| 对局中周期性跳 ping、丢包 | 对战平台（完美、5E 等）每隔一段时间上传一批数据，上行带宽小的网络会被瞬间占满 | 给这个进程的上传设一个上限，把突发削平 |
-| 开着代理 TUN 时限速软件全部失效 | 流量先进虚拟网卡，再由代理进程统一发出，系统已经分不清是谁的流量 | 让代理把指定进程的连接转给 ProcTamer，由它限速后再发出 |
+1. [Problems it solves](#1-problems-it-solves)
+2. [Features](#2-features)
+3. [Requirements and quick start](#3-requirements-and-quick-start)
+4. [User interface](#4-user-interface)
+5. [Operating rules](#5-operating-rules)
+6. [Configuration for TUN mode](#6-configuration-for-tun-mode)
+7. [How it works](#7-how-it-works)
+8. [Verification](#8-verification)
+9. [Test results](#9-test-results)
+10. [Known limitations](#10-known-limitations)
+11. [Risks and disclaimer](#11-risks-and-disclaimer)
+12. [Uninstalling and checking for leftovers](#12-uninstalling-and-checking-for-leftovers)
+13. [Building and development](#13-building-and-development)
+14. [License](#14-license)
 
-被处理的进程照常运行，只是变慢、不抢资源。ProcTamer 不会结束、挂起或屏蔽任何进程。
+---
 
-> 平台"周期性上传导致丢包"的说法来自玩家用流量监控工具的个别观察，并未大范围验证。是否对你有效，请按[验证是否生效](#验证是否生效)自己确认。
+## 1. Problems it solves
 
-## 功能一览
+### 1.1 The problems
 
-| 功能 | 做什么 | 需要管理员 | TUN 下可用 |
+| # | Problem | Cause | What ProcTamer does |
 |---|---|---|---|
-| 效能模式 | 发现进程在运行时，设为低优先级 + 效能模式（EcoQoS）+ 极低 I/O 优先级 | 普通进程不需要 | 是 |
-| 注册表优先级 | 让系统在进程**启动时**直接给低优先级，用于会拒绝访问的受保护进程 | 需要 | 是 |
-| 限上传（系统 QoS） | 用 Windows 策略式 QoS 按程序名限速 | 需要 | **否** |
-| 限上传（本机中转） | 代理把该进程的 TCP 转给 ProcTamer，用令牌桶限上传，下载不限 | 不需要 | 是 |
-| 同步到 Clash | 把要限速的进程名单自动写进 Clash Verge 的全局扩展脚本，增减进程后自动更新 | 不需要 | 是 |
-| 状态显示 | 每条规则是否生效、进程是否在运行、中转连接数 / 速率 / 累计量 | — | — |
-| 托盘常驻、开机自启 | 关窗缩到托盘；可登记为登录时以管理员权限静默启动 | 自启需要 | — |
+| 1 | The foreground program stutters or drops frames intermittently | Background programs (security scans, anti-cheat, indexing, updaters, sync clients) compete with it for CPU and disk | Puts the chosen processes at the lowest CPU priority and the lowest disk I/O priority, so the foreground program is served first |
+| 2 | Latency spikes and packet loss at regular intervals | A background program uploads in bursts and saturates the uplink. This is most visible on connections with a small uplink, such as home broadband or a mobile hotspot | Sets an upload ceiling for the chosen processes, flattening the bursts |
+| 3 | Per-process rate limiting stops working once the proxy is in TUN mode | Traffic enters a virtual adapter first and is then sent out by the proxy process, so the operating system can no longer tell whose traffic it is | The proxy hands the connections of the chosen processes to ProcTamer, which rate limits them before sending them on |
+| 4 | A protected process refuses to have its priority changed | Some security and anti-cheat processes do not allow other programs to open a handle to them | Uses a registry mechanism so that the process starts at low priority in the first place |
+| 5 | Comparable tools need a kernel driver, or leave changes behind that are hard to undo | — | No driver; every change is tagged and reverted item by item on exit |
 
-"限上传 KB/s"是同一个数值，两种限速方式都用它：没开 TUN 时由系统 QoS 执行，开了 TUN 且配好代理规则后由本机中转执行。
+A restrained process keeps running. It simply runs more slowly and stops crowding out everything else.
 
-## 快速开始
+### 1.2 Typical use cases
 
-**环境**：Windows 10 / 11（64 位）。系统自带的 .NET Framework 4.x 即可，不需要另外安装任何东西。
+| Use case | Examples of what to restrain | Suggested features |
+|---|---|---|
+| Online gaming | Anti-cheat background scans, matchmaking platform clients, launcher background updates | Efficiency mode, registry priority, upload limit |
+| Video calls, remote desktop, live streaming | Cloud drive sync, backup software, system or application updates | Upload limit |
+| Any connection with a tight uplink | Any background program that uploads continuously or in bursts | Upload limit |
+| Low-end machines | Indexing services, security software scans, assorted background helpers | Efficiency mode, registry priority |
+| A proxy that is always in TUN mode | Any of the above that needs an upload limit | Upload limit + Sync to Clash |
 
-1. 下载本仓库（`Code → Download ZIP` 并解压，或 `git clone`）。
-2. 双击 `build.cmd`，同目录下生成 `ProcTamer.exe`。
-3. 运行 `ProcTamer.exe`。首次运行会载入一组预设规则，**全部默认不启用**。
-4. 在要处理的进程那一行勾上"启用"，按需勾选功能或填写限速值。
-5. 需要"注册表优先级"、系统 QoS 限速或开机自启时，点工具栏的"以管理员身份重启"。
-6. 游戏时开着代理 TUN 的话，再按 [TUN 模式下限上传](#tun-模式下限上传) 配一次代理。
+The preset rules loaded on first run use online gaming as the example (see [3.3](#33-preset-rules)). They are only a starting point. **Any process can be added with the "Add process" button.**
 
-预设规则：
+### 1.3 What it is not for
 
-| 进程 | 所属 | 效能模式 | 注册表优先级 | 限上传 KB/s |
+- Limiting **download** speed: ProcTamer limits upload only.
+- Limiting **UDP** traffic under TUN mode: the local relay handles TCP only.
+- Blocking a program from the network or from running: ProcTamer never blocks or terminates a process.
+
+---
+
+## 2. Features
+
+| Feature | Effect | Administrator required | Works under TUN |
+|---|---|---|---|
+| Efficiency mode | While the process runs, sets it to low priority, efficiency mode (EcoQoS) and very low I/O priority | Not for ordinary processes | Yes |
+| Registry priority | Makes Windows assign low priority **when the process starts**; intended for protected processes that deny access | Yes | Yes |
+| Upload limit (system QoS) | Rate limits by executable name through Windows policy-based QoS | Yes | **No** |
+| Upload limit (local relay) | The proxy forwards the process's TCP connections to ProcTamer, which limits upload with a token bucket; download is not limited | No | Yes |
+| Sync to Clash | Writes the list of processes to be limited into Clash Verge's global script and keeps it up to date as rules change | No | Yes |
+| Status display | Shows, per rule, whether it is in effect, whether the process is running, and the relay's connection count, upload rate and total | — | — |
+| Tray and autostart | Stays in the tray when the window is closed; can be registered to start silently with administrator rights at logon | For autostart | — |
+
+The "upload limit KB/s" value is shared by both limiting methods: system QoS enforces it when TUN is off; the local relay enforces it when TUN is on and the proxy rules are in place.
+
+---
+
+## 3. Requirements and quick start
+
+### 3.1 Requirements
+
+- Windows 10 or Windows 11, 64-bit
+- .NET Framework 4.x, which ships with Windows (nothing to install)
+- For upload limiting under TUN mode: Clash Verge or another client based on the mihomo core
+
+### 3.2 Quick start
+
+1. Download this repository (`Code → Download ZIP` and extract it, or `git clone`).
+2. Double-click `build.cmd`. It produces `ProcTamer.exe` in the same folder.
+3. Run `ProcTamer.exe`. The first run loads the preset rules, **all disabled by default**.
+4. Tick the first column ("启用", Enabled) on the rows you want, then tick features or enter an upload limit as needed.
+5. To use registry priority, system QoS limiting or autostart, click "以管理员身份重启" (Restart as administrator) on the toolbar.
+6. If your proxy normally runs in TUN mode, click "同步到 Clash" (Sync to Clash) on the toolbar, then, in Clash Verge's Profiles page, click "Use" once on the current profile ("使用" in the Chinese interface; some versions label it "Select"). See [section 6](#6-configuration-for-tun-mode).
+
+### 3.3 Preset rules
+
+| Process | Description | Efficiency mode | Registry priority | Upload limit KB/s |
 |---|---|---|---|---|
-| `SGuard64.exe` | 腾讯 ACE 反作弊 | 是 | 是 | 0 |
-| `SGuardSvc64.exe` | 腾讯 ACE 反作弊 | 是 | 是 | 0 |
-| `完美世界竞技平台.exe` | 完美平台主程序 | 否 | 否 | 100 |
-| `pwautil64.exe` | 完美平台组件 | 否 | 否 | 100 |
-| `WmgpOptimizer_x64.exe` | 完美平台组件 | 否 | 否 | 100 |
-| `5EClient.exe` | 5E 平台主程序 | 否 | 否 | 100 |
-| `Bucky64.exe` | 5E 目录下的组件（推测为反作弊） | 否 | 否 | 100 |
+| `SGuard64.exe` | Tencent ACE anti-cheat | Yes | Yes | 0 |
+| `SGuardSvc64.exe` | Tencent ACE anti-cheat | Yes | Yes | 0 |
+| `完美世界竞技平台.exe` | Perfect World Arena platform, main program | No | No | 100 |
+| `pwautil64.exe` | Perfect World Arena platform component | No | No | 100 |
+| `WmgpOptimizer_x64.exe` | Perfect World Arena platform component | No | No | 100 |
+| `5EClient.exe` | 5E Arena platform, main program | No | No | 100 |
+| `Bucky64.exe` | Component in the 5E folder (presumed anti-cheat) | No | No | 100 |
 
-这只是起点，任何进程都可以用"添加进程"加进来。
+Delete any preset you do not need.
 
-## 界面说明
+---
 
-### 列
+## 4. User interface
 
-| 列 | 含义 |
+### 4.1 Columns
+
+| Label | English | Meaning |
+|---|---|---|
+| 启用 | Enabled | Master switch for the rule. When unticked, nothing else on the row applies |
+| 进程 | Process | Executable name without a path, case-insensitive |
+| 效能模式 | Efficiency mode | While the process runs, set it to low priority, efficiency mode and very low I/O priority |
+| 注册表优先级 | Registry priority | Register "start this program at low priority" in the registry. Affects only processes started afterwards |
+| 限上传 KB/s | Upload limit KB/s | Upload rate ceiling; `0` means unlimited. 1 KB is 1000 bytes |
+| 状态 | Status | What the rule is actually doing right now; see 4.2 |
+
+### 4.2 Status column
+
+| Text shown | Meaning |
 |---|---|
-| 启用 | 这条规则的总开关。不勾则后面的设置都不生效 |
-| 进程 | 程序名（不含路径），不区分大小写 |
-| 效能模式 | 进程运行时把它设为低优先级 + 效能模式 + 极低 I/O 优先级 |
-| 注册表优先级 | 在注册表登记"此程序启动时即为低优先级"。只对之后启动的进程生效 |
-| 限上传 KB/s | 上传速度上限，`0` = 不限。1 KB 按 1000 字节计 |
-| 状态 | 这条规则当前的实际效果，见下表 |
+| `未启用` / `已暂停` | Not enabled / paused: the rule is not in effect |
+| `未运行` / `运行中×3` | Not running / running, with the number of instances |
+| `效能✔` | Efficiency mode applied |
+| `效能✘ 拒绝访问` | Access denied: the process is protected. Use registry priority instead |
+| `注册表✔` | Registry entry written; takes effect the next time the process starts |
+| `注册表✘ 需管理员` | Administrator rights required |
+| `注册表✘ 已有其他设置` | The program already has priority settings from another source; ProcTamer does not overwrite them |
+| `限速✔ 100KB/s` | System QoS policy created |
+| `限速✘ 流量走 Meta（TUN），等待中转连接` | TUN detected, so system QoS has no effect, and no connection has reached the relay yet (the proxy rules are not in place, or the process is not using the network) |
+| `限速✘ 中转未启动` | The relay could not listen on local port 17877; the status bar gives the reason |
+| `中转 2 连接  ↑ 37.5 KB/s（限 100）  累计 1.2 MB` | Being forwarded through the relay: connection count, current upload rate (and the limit), total uploaded |
 
-### 状态列常见内容
+### 4.3 Toolbar and tray
 
-| 显示 | 含义 |
+| Label | English | Effect |
+|---|---|---|
+| 添加进程 | Add process | Adds a rule. Pick from the running processes or type an executable name |
+| 删除 | Delete | Deletes the selected rule |
+| 暂停全部 / 恢复全部 | Pause all / Resume all | Suspends or resumes every rule. While paused the relay keeps forwarding without limiting |
+| 开机自启 | Autostart | Registers or removes start at logon (administrator rights, silently to the tray) |
+| 同步到 Clash | Sync to Clash | Turns synchronisation with Clash Verge's global script on or off. Highlighted when on |
+| 以管理员身份重启 | Restart as administrator | Shown only when not running as administrator |
+| Tray icon | — | Green: running. Grey: paused. Orange: not administrator. Double-click to show the window |
+
+Closing the window only hides it to the tray. **"退出并还原" (Exit and restore) in the tray menu is what actually exits.**
+
+---
+
+## 5. Operating rules
+
+This section states the program's defined behaviour as numbered clauses.
+
+### 5.1 Matching and activation
+
+1. A rule matches processes by **executable name**, without a path and case-insensitively. Every instance with that name is subject to the same rule.
+2. A rule is in effect when both conditions hold: "Enabled" is ticked, and "Pause all" is not active.
+3. The process list is scanned every 2 seconds, and once immediately after any rule change.
+4. Rules are stored in `rules.tsv` next to the executable and written on every change.
+5. The program is single-instance; a second launch reports that it is already running.
+
+### 5.2 Efficiency mode
+
+1. For each process matched by an active rule, the program sets: the Idle priority class, EcoQoS execution speed throttling, and Very Low I/O priority.
+2. When the rule is disabled, paused or deleted, or the program exits, previously handled processes are returned to the **Normal** priority class, EcoQoS throttling is cleared, and I/O priority is set back to Normal. The process name is checked first, in case the process ID has been reused.
+3. If the target process denies access, no other technique is attempted, and the status column says so.
+
+### 5.3 Registry priority
+
+1. Performed only with administrator rights.
+2. The location is `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\<executable>\PerfOptions`. The program writes `CpuPriorityClass=1` and `IoPriority=0`, plus a marker value `ProcTamer=1`.
+3. If settings without the marker already exist at that location, they are neither overwritten nor modified.
+4. When the rule is disabled, paused or deleted, or the program exits, entries carrying the marker are removed. Entries without it are left untouched.
+5. The setting applies only to processes started after it is written, not to processes already running.
+
+### 5.4 Upload limit
+
+1. The unit is KB/s, with 1 KB = 1000 bytes. `0` means unlimited.
+2. Only the upload direction (local process → outside network) is limited. Download is never limited.
+3. System QoS method: performed only with administrator rights. Policy names are prefixed `ProcTamer_` and written to `ActiveStore` (not persisted; gone after a reboot). On every rule change all of the program's policies are deleted and recreated. All are deleted on exit.
+4. The program checks which adapter outbound traffic leaves through. If it is a virtual adapter, the system QoS method is judged ineffective and the status column says so.
+
+### 5.5 Local relay
+
+1. While the program runs it always listens on `127.0.0.1:17877`, with exclusive use of the port. It accepts no connections from other hosts.
+2. The protocol is SOCKS5. Only username/password authentication is accepted; **the username is the process name**, and the password is not checked.
+3. Only the `CONNECT` command (TCP) is supported. `BIND`, `UDP ASSOCIATE` and connections without a username are refused.
+4. If the rule for that username is in effect and its limit is above 0, the upload direction of the connection is limited. Otherwise the connection is forwarded without limiting. Connections whose username has no rule are likewise forwarded without limiting.
+5. All connections under one process name share a single token bucket, so the limit is the combined ceiling for that process.
+6. The program only forwards bytes. It does not parse, alter or record connection contents.
+7. When the destination is a host name, the program resolves it, prefers IPv4, tries at most 3 addresses, and allows 10 seconds per address. The handshake timeout is 10 seconds.
+8. On exit the listener stops and established relay connections are dropped.
+
+### 5.6 Sync to Clash
+
+1. The feature operates on exactly one file: `%APPDATA%\io.github.clash-verge-rev.clash-verge-rev\profiles\Script.js`, which is Clash Verge's global script. If the file does not exist, nothing is written.
+2. The feature is off by default and is turned on only when the user clicks "Sync to Clash" and confirms. Whether it is on is determined by whether the program's markers are present in that file.
+3. The program rewrites only what lies between the two markers `// BEGIN PROCTAMER` and `// END PROCTAMER`. Apart from the single call line described in clause 5, nothing outside the markers is changed.
+4. Before the first write, the original file is backed up to the parent folder as `Script.js.bak-<yyyyMMddHHmmss>-proctamer`. Later updates do not create further backups.
+5. On the first write:
+   - if the file is Clash Verge's blank template, or the standalone `proctamer-relay.js` from this project, it is replaced as a whole with "the marked block plus a `main` function that only calls it";
+   - if the file has other content, the marked block is placed at the top and `config = procTamerRelay(config);` is inserted as the first line of the existing `main` function body;
+   - if no `main` function can be found, nothing is written and the reason is reported.
+6. The list consists of **every rule whose upload limit is above 0**, whether or not it is enabled. Rules whose executable name contains a comma or parentheses are left out, because the proxy's rule syntax does not allow them.
+7. Once on, the program compares the list at startup and on every rule change, and rewrites the file only when the content differs.
+8. When the script file is newer than Clash Verge's generated runtime configuration, the status bar says the configuration needs to be reloaded in Clash Verge. **The program does not, and cannot, trigger that reload on the user's behalf.**
+9. Clicking "Sync to Clash" again and confirming removes the marked block and the call line from clause 5. Everything else is kept.
+10. The file's existing line-ending style (LF or CRLF) is preserved, and it is written as UTF-8 without a BOM.
+
+### 5.7 Privileges
+
+| Operation | Privilege needed |
 |---|---|
-| `未启用` / `已暂停` | 规则没在生效 |
-| `未运行` / `运行中×3` | 该进程当前的实例数 |
-| `效能✔` | 效能模式已套用 |
-| `效能✘ 拒绝访问` | 进程受保护，改不动。改用"注册表优先级" |
-| `注册表✔` | 注册表项已写入，下次启动该进程时生效 |
-| `注册表✘ 需管理员` | 当前不是管理员 |
-| `注册表✘ 已有其他设置` | 该程序已有别人写的优先级设置，ProcTamer 不覆盖 |
-| `限速✔ 100KB/s` | 系统 QoS 策略已建立 |
-| `限速✘ 流量走 Meta（TUN），等待中转连接` | 检测到 TUN，系统 QoS 无效；还没有连接经中转过来（代理没配好，或该进程没在联网） |
-| `限速✘ 中转未启动` | 本机 17877 端口监听失败，底部状态栏会给出原因 |
-| `中转 2 连接  ↑ 37.5 KB/s（限 100）  累计 1.2 MB` | 正在经中转转发：当前连接数、上传速率、累计上传量 |
+| Efficiency mode (ordinary processes), local relay, Sync to Clash | Standard user |
+| Efficiency mode (processes of other users, or protected processes) | Administrator; protected processes may still deny access |
+| Registry priority, system QoS limiting, autostart | Administrator |
 
-### 工具栏与托盘
+The program starts with standard rights and never requests elevation on its own. Elevation happens only when the user clicks "Restart as administrator".
 
-- **添加进程 / 删除**：增减规则。添加时可从正在运行的进程里选，也可直接输入程序名。
-- **暂停全部**：让所有规则临时失效。中转照常转发，只是不限速。
-- **开机自启**：登记一个登录时触发的计划任务，以管理员权限静默启动到托盘。
-- **同步到 Clash**：把限上传大于 0 的进程写进 Clash Verge 的全局扩展脚本，按钮高亮表示已开启。再点一次移除。详见 [TUN 模式下限上传](#tun-模式下限上传)。
-- **以管理员身份重启**：仅在非管理员运行时显示。
-- **托盘图标**：绿色 = 运行中，灰色 = 已暂停，橙色 = 非管理员。双击显示主窗口。
-- 点窗口的关闭按钮只是缩到托盘；托盘右键 **"退出并还原"** 才是真正退出。
+### 5.8 Exit and restore
 
-## TUN 模式下限上传
+1. On "Exit and restore" the program, in order: stops the local relay; restores the priority of handled processes; deletes registry entries carrying its marker; deletes all `ProcTamer_*` QoS policies.
+2. The following are **not** undone by exiting and must be turned off from within the program: the autostart scheduled task; the marked block in Clash Verge's global script.
+3. If the program is killed or the system shuts down abnormally, no restore takes place. QoS policies disappear at the next reboot. Registry entries remain and are re-synchronised to the current rules the next time the program starts.
 
-### 为什么需要额外配置
+### 5.9 What the program does not do
 
-Clash Verge、mihomo 等代理开启 TUN 后，所有程序的流量先进入一块虚拟网卡，再由代理进程从物理网卡发出。此时：
+- It does not terminate, suspend or inject into any process, and does not read or write another process's memory.
+- It does not install drivers, services or system-wide hooks.
+- It does not intercept, decrypt, alter or record any network content.
+- It initiates no network connections of its own, and collects and uploads no data.
+- It does not modify the proxy's subscriptions, nor any proxy configuration file other than the one named in 5.6.
 
-- Windows 的 QoS 限速只绑定在物理网卡上，虚拟网卡上不生效；
-- 到了物理网卡，流量已经全部属于代理进程，无法再按原程序区分。
+---
 
-所以系统自带的按进程限速（QoS 策略、作业对象）在 TUN 下都无效。ProcTamer 的做法是换一个位置限速：**代理仍然知道每条连接来自哪个进程，让它把指定进程的连接转给 ProcTamer。**
+## 6. Configuration for TUN mode
+
+### 6.1 Why extra configuration is needed
+
+With TUN enabled, every program's traffic enters a virtual adapter first and is then sent out through the physical adapter by the proxy process. As a result:
+
+- Windows QoS limiting is bound to physical adapters only and does not act on the virtual one;
+- by the time traffic reaches the physical adapter it all belongs to the proxy process and can no longer be told apart by originating program.
+
+So the per-process limiting mechanisms built into Windows (QoS policies, job objects) are all ineffective under TUN. ProcTamer limits at a different point instead: **the proxy still knows which process each connection belongs to, so it hands the chosen processes' connections over.**
 
 ```
-被限速的进程
+Process being limited
    │  TCP
    ▼
-虚拟网卡（TUN）
+Virtual adapter (TUN)
    │
    ▼
-代理内核（mihomo）── 按进程名匹配规则
-   │  SOCKS5，用户名 = 进程名
+Proxy core (mihomo) ── rule match by process name
+   │  SOCKS5, username = process name
    ▼
-ProcTamer 本机中转 127.0.0.1:17877 ── 令牌桶限上传
-   │  由 ProcTamer.exe 发出
+ProcTamer local relay 127.0.0.1:17877 ── token bucket on upload
+   │  sent by ProcTamer.exe
    ▼
-代理内核 ── 规则：ProcTamer.exe 一律直连
+Proxy core ── rule: ProcTamer.exe always DIRECT
    │
    ▼
-物理网卡 → 互联网
+Physical adapter → Internet
 ```
 
-### Clash Verge：点一下"同步到 Clash"（推荐）
+### 6.2 Option 1: Sync to Clash (recommended, for Clash Verge)
 
-1. 在 ProcTamer 工具栏点 **"同步到 Clash"**，确认。
-2. 到 Clash Verge 的订阅（Profiles）页，在当前订阅卡片上点一次"使用"，让它重新生成配置。
+1. Click "同步到 Clash" (Sync to Clash) on the ProcTamer toolbar and confirm.
+2. In Clash Verge's Profiles page, click "Use" once on the current profile (some versions label it "Select") so the configuration is regenerated.
 
-之后在 ProcTamer 里添加 / 删除进程，或把某个进程的限速值在 0 和非 0 之间改动，脚本会自动更新，状态栏会提示"Clash 规则已更新"，这时再去点一次"使用"即可。只是勾选 / 取消"启用"、点"暂停全部"或调整限速数值，不需要动 Clash，立即生效。
+From then on, whether a reload is needed depends on the action:
 
-这个功能改的是 Clash Verge 的全局扩展脚本 `%APPDATA%\io.github.clash-verge-rev.clash-verge-rev\profiles\Script.js`，规则如下：
-
-- **只改两个标记之间的那一段**，脚本里别的内容原样保留：
-
-  ```js
-  // BEGIN PROCTAMER
-  // ……由 ProcTamer 自动维护的 procTamerRelay(config) 函数……
-  // END PROCTAMER
-
-  function main(config, profileName) {
-    config = procTamerRelay(config);   // ProcTamer 加的唯一一行调用
-    // 你自己的其他逻辑可以继续写在这里
-    return config;
-  }
-  ```
-
-- 第一次写入前会把原文件备份到上一级目录，文件名形如 `Script.js.bak-<时间>-proctamer`。
-- 脚本原本是空白模板（或旧版的独立 `proctamer-relay.js`）时，直接生成上面的结构；已经有你自己的内容时，把那一段加在最前面，并在你的 `main` 函数第一行补上那句调用。
-- 写进名单的是**所有限上传大于 0 的规则**，不管是否勾了"启用"。启用与否只决定中转里限不限速。
-- 再点一次"同步到 Clash"会移除那一段和那句调用，其余内容不动。
-- 找不到 Clash Verge 时按钮会提示，不做任何修改。
-
-### Clash Verge：手动使用现成脚本
-
-不想让 ProcTamer 改 Clash 的文件，可以手动安装。仓库里的 [`proctamer-relay.js`](proctamer-relay.js) 是给 Clash Verge 的**全局扩展脚本**用的独立版本，效果与自动生成的那一段完全相同。
-
-1. 打开 Clash Verge → 订阅（Profiles）页 → "全局扩展脚本"（Global Extend Script）。不同版本的菜单文字可能略有出入。
-2. 先把里面原有的内容复制出来留个备份，再用 `proctamer-relay.js` 的内容整体替换，保存。
-3. Clash Verge 会重新生成配置。没生效的话，在当前订阅卡片上再点一次"使用"。
-
-### 脚本做了什么
-
-脚本（两种方式相同）在订阅原有内容的基础上追加节点、策略组和规则，不改动原有配置。它为列表里的每个进程做三件事：
-
-| 追加的内容 | 名称 | 说明 |
+| Action in ProcTamer | Script updated | "Use" needed again in Clash Verge |
 |---|---|---|
-| 节点 | `ProcTamer-Relay <进程名>` | `socks5`，`127.0.0.1:17877`，用户名 = 进程名 |
-| 策略组 | `ProcTamer <进程名>` | `fallback`：`[上面的节点, DIRECT]`，每 30 秒健康检查一次 |
-| 规则 | `AND,((PROCESS-NAME,<进程名>),(NETWORK,TCP)),ProcTamer <进程名>` | 只匹配该进程的 TCP |
+| Add or delete a process that has an upload limit | Yes | Yes |
+| Change a process's limit from 0 to non-zero, or from non-zero to 0 | Yes | Yes |
+| Change the limit value (staying above 0) | No | No, takes effect immediately |
+| Tick or untick "Enabled"; pause or resume all | No | No, takes effect immediately |
 
-另外在最前面加一条 `PROCESS-NAME,ProcTamer.exe,DIRECT`，保证 ProcTamer 自己发出的连接不会被再次转回中转。
-
-因为策略组是 `fallback`，**ProcTamer 没运行时健康检查会失败，流量自动走直连**，不会断网。
-
-手动安装时，要增减进程得自己改脚本开头的 `PROCESSES` 数组，并在 ProcTamer 里添加同名规则（用"同步到 Clash"则不需要）：
+The resulting script has this shape; the exact rules are in [5.6](#56-sync-to-clash):
 
 ```js
-const PROCESSES = [
-  "完美世界竞技平台.exe",
-  "pwautil64.exe",
-  "WmgpOptimizer_x64.exe",
-  "5EClient.exe",
-  "Bucky64.exe"
-];
+// BEGIN PROCTAMER
+// ... the procTamerRelay(config) function, maintained by ProcTamer ...
+// END PROCTAMER
+
+function main(config, profileName) {
+  config = procTamerRelay(config);   // the only call line ProcTamer adds
+  // your own logic can continue here
+  return config;
+}
 ```
 
-### 其他 mihomo 客户端：手写配置
+### 6.3 Option 2: install the standalone script by hand (for Clash Verge)
 
-不用 Clash Verge 的话，把下面的内容按进程各写一份加进配置即可，规则必须放在其他规则之前：
+If you would rather not have ProcTamer rewrite a Clash Verge file, install the script manually. [`proctamer-relay.js`](proctamer-relay.js) in this repository is a standalone version whose effect is identical to the block generated by option 1.
+
+1. Open Clash Verge → Profiles → "Global Extend Script". The menu wording may differ slightly between versions.
+2. Save the existing content somewhere as a backup, then replace everything with the content of `proctamer-relay.js` and save.
+3. Clash Verge regenerates the configuration. If it does not take effect, click "Use" on the current profile again.
+
+With this option, adding or removing processes means editing the `PROCESSES` array at the top of the script yourself, and adding a rule with the same name in ProcTamer.
+
+### 6.4 Option 3: write the configuration by hand (for other mihomo clients)
+
+Write one set of the following per process. The rules must come before all other rules.
 
 ```yaml
 proxies:
-  - name: ProcTamer-Relay 5EClient.exe
+  - name: ProcTamer-Relay example.exe
     type: socks5
     server: 127.0.0.1
     port: 17877
-    username: 5EClient.exe      # 用户名就是进程名
-    password: proctamer         # 任意非空值，中转不检查密码
+    username: example.exe       # the username is the process name
+    password: proctamer         # any non-empty value; the relay does not check it
     udp: false
 
 proxy-groups:
-  - name: ProcTamer 5EClient.exe
+  - name: ProcTamer example.exe
     type: fallback
     proxies:
-      - ProcTamer-Relay 5EClient.exe
+      - ProcTamer-Relay example.exe
       - DIRECT
     url: http://www.msftconnecttest.com/connecttest.txt
     interval: 30
@@ -242,160 +346,161 @@ proxy-groups:
 
 rules:
   - PROCESS-NAME,ProcTamer.exe,DIRECT
-  - AND,((PROCESS-NAME,5EClient.exe),(NETWORK,TCP)),ProcTamer 5EClient.exe
+  - AND,((PROCESS-NAME,example.exe),(NETWORK,TCP)),ProcTamer example.exe
 ```
 
-任何能"按进程名把 TCP 连接转给一个带用户名的 SOCKS5 出口"的代理软件都可以用同样的思路接入。
+Any proxy software that can "send the TCP connections of a named process to a SOCKS5 outbound with a username" can be connected in the same way.
 
-### 撤销
+### 6.5 What the script changes
 
-用"同步到 Clash"装的：再点一次这个按钮，然后到 Clash Verge 点一次"使用"。
+All three options have the same effect: proxies, proxy groups and rules are appended to what the subscription already contains, and nothing existing is altered.
 
-手动装的：把全局扩展脚本恢复成默认内容并保存：
+| Added | Name | Notes |
+|---|---|---|
+| Proxy | `ProcTamer-Relay <process>` | `socks5`, `127.0.0.1:17877`, username is the process name |
+| Proxy group | `ProcTamer <process>` | `fallback`: `[the proxy above, DIRECT]`, health check every 30 seconds |
+| Rule | `AND,((PROCESS-NAME,<process>),(NETWORK,TCP)),ProcTamer <process>` | Matches only that process's TCP connections |
+| Rule | `PROCESS-NAME,ProcTamer.exe,DIRECT` | Placed first, so ProcTamer's own connections are never sent back into the relay |
 
-```js
-// Define main function (script entry)
+The group type is `fallback`: **when ProcTamer is not running the health check fails and traffic goes DIRECT automatically**, so connectivity is not lost.
 
-function main(config, profileName) {
-  return config;
-}
-```
+### 6.6 Reverting
 
-只是临时不想限速的话不用动代理：在 ProcTamer 里点"暂停全部"，或直接退出 ProcTamer（约 30 秒内自动回落直连）。
+- Option 1: click "Sync to Clash" again and confirm, then click "Use" once in Clash Verge.
+- Option 2: restore the global script to its default content and save:
 
-## 工作原理
+  ```js
+  // Define main function (script entry)
 
-### 效能模式
+  function main(config, profileName) {
+    return config;
+  }
+  ```
 
-定时器每 2 秒按进程名查找，对匹配的进程调用：
+- Option 3: delete the proxies, groups and rules you added.
 
-- `SetPriorityClass(IDLE_PRIORITY_CLASS)`：最低 CPU 优先级；
-- `SetProcessInformation(ProcessPowerThrottling)`：开启 EcoQoS，也就是任务管理器里的"效能模式"；
-- `NtSetInformationProcess(ProcessIoPriority = VeryLow)`：最低磁盘 I/O 优先级。
+To lift the limit only temporarily there is no need to touch the proxy: click "Pause all" in ProcTamer, or simply exit ProcTamer (traffic falls back to DIRECT within about 30 seconds).
 
-处理过的进程会被记下来，规则停用、暂停或程序退出时恢复为普通优先级。恢复前会核对进程名，避免进程号被复用后误改别的进程。
+---
 
-### 注册表优先级
+## 7. How it works
 
-写入
+### 7.1 Efficiency mode
 
-```
-HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\<程序名>\PerfOptions
-    CpuPriorityClass = 1   (Idle)
-    IoPriority       = 0   (VeryLow)
-    ProcTamer        = 1   (本程序的标记)
-```
+For each matching process the program calls, in turn:
 
-这是 Windows 自带的机制：内核在创建进程时直接套用这些值，所以对拒绝外部修改的受保护进程也有效。代价是只对之后启动的进程生效。
+- `SetPriorityClass(IDLE_PRIORITY_CLASS)`: the lowest CPU priority class;
+- `SetProcessInformation(ProcessPowerThrottling)`: turns on EcoQoS, which Task Manager shows as "Efficiency mode";
+- `NtSetInformationProcess(ProcessIoPriority = VeryLow)`: the lowest disk I/O priority.
 
-ProcTamer 只动带有自己标记的项：已有别人写的 `PerfOptions` 时不覆盖，删除时也只删带标记的。
+### 7.2 Registry priority
 
-### 限上传：系统 QoS
+This uses the Image File Execution Options mechanism built into Windows. The kernel reads `PerfOptions` when it creates the process and applies the values directly, which is why it also works for protected processes that reject changes from outside.
 
-通过 Windows PowerShell 调用 `New-NetQosPolicy`，按程序名建立限速策略，写入 `ActiveStore`（不落盘，重启后自动消失）。策略名以 `ProcTamer_` 开头，规则变化时先删后建，退出时全部删除。
+### 7.3 System QoS limiting
 
-程序会检测外网流量的出口网卡：如果是虚拟网卡，就在状态里如实标明这种限速不生效。
+`New-NetQosPolicy` is invoked through Windows PowerShell to create a throttling policy matched on the executable name. The conversion is `KB/s × 8000 = bit/s`.
 
-### 限上传：本机中转
+### 7.4 Local relay and token bucket
 
-ProcTamer 启动时在 `127.0.0.1:17877` 开一个 SOCKS5 服务：
-
-- 只监听本机回环地址，独占端口，局域网访问不到；
-- 只接受用户名 / 密码认证，**用户名就是进程名**，密码不检查；
-- 只支持 `CONNECT`（TCP）。`UDP ASSOCIATE`、`BIND`、不带用户名的连接一律拒绝；
-- 目标地址支持 IPv4、IPv6 和域名（域名由 ProcTamer 自行解析，优先 IPv4）。
-
-限速用的是**令牌桶**，同一进程的所有连接共用一个桶：
-
-| 参数 | 取值 |
+| Parameter | Value |
 |---|---|
-| 速率 | `限上传 KB/s × 1000` 字节 / 秒 |
-| 桶容量 | 0.25 秒的量，最少 4096 字节 |
-| 最小放行块 | `速率 / 50`，最少 512 字节（避免把数据切成很多小包） |
+| Rate | `upload limit KB/s × 1000` bytes per second |
+| Bucket capacity | 0.25 seconds of traffic, at least 4096 bytes |
+| Minimum release | `rate ÷ 50`, at least 512 bytes (avoids cutting data into many tiny packets) |
 
-桶里的令牌不够时，ProcTamer 停止从代理读取数据。TCP 的流量控制会把这个压力一路传回原进程，让它自己慢下来，数据不会在中间堆积。
+When tokens run short, the program stops reading from the proxy. TCP flow control carries that back-pressure all the way to the originating process, which slows its own sending. Data does not pile up in between.
 
-下载方向（外网 → 进程）不经过令牌桶，全速转发。规则未启用、已暂停、限速为 0，或用户名没有对应规则时，照常转发、不限速。
+After one direction of a connection ends, the other is kept for at most 60 seconds to finish. TCP keepalive is enabled on both sides (probing after 60 seconds idle).
 
-## 验证是否生效
+---
 
-**1. 中转在监听**
+## 8. Verification
+
+**(1) Is the relay listening?**
 
 ```powershell
 Get-NetTCPConnection -LocalPort 17877 -State Listen
 ```
 
-**2. 手动走一次中转**（用户名随便填一个规则里的进程名）
+**(2) Send one request through the relay by hand** (use any process name from your rules as the username)
 
 ```powershell
-curl.exe --socks5-hostname 127.0.0.1:17877 --proxy-user "5EClient.exe:x" http://www.msftconnecttest.com/connecttest.txt
+curl.exe --socks5-hostname 127.0.0.1:17877 --proxy-user "example.exe:x" http://www.msftconnecttest.com/connecttest.txt
 ```
 
-应输出 `Microsoft Connect Test`，同时 ProcTamer 里 `5EClient.exe` 那一行会出现中转统计。
+It should print `Microsoft Connect Test`, and relay statistics should appear on the corresponding row in ProcTamer.
 
-**3. 代理规则已加载**：Clash Verge 的规则页最前面能看到 `PROCESS-NAME,ProcTamer.exe,DIRECT` 和各进程的 `AND,(...)` 规则；代理页里 `ProcTamer <进程名>` 组在 ProcTamer 运行时选中的是 `ProcTamer-Relay ...`。
+**(3) Are the proxy rules loaded?** Near the top of Clash Verge's Rules page you should see `PROCESS-NAME,ProcTamer.exe,DIRECT` and an `AND,(...)` rule per process. In the Proxies page, each `ProcTamer <process>` group should have `ProcTamer-Relay ...` selected while ProcTamer is running.
 
-**4. 真实流量**：目标进程运行时，代理的连接页里它的 TCP 连接应显示走 `ProcTamer-Relay`；ProcTamer 状态列显示连接数，上传速率不超过限速值。
+**(4) Real traffic.** While the target process runs, its TCP connections in the proxy's Connections page should show `ProcTamer-Relay` in the chain. ProcTamer's status column shows the connection count, and the upload rate stays at or below the limit.
 
-**5. 判断限速对你有没有用**：如果游戏里周期性的上行突发仍然存在，而对应进程的中转累计量几乎不增长，说明那部分数据走的是 UDP，本工具管不到（见[已知限制](#已知限制)）。
+**(5) Is the limit addressing your problem?** If the upload bursts persist while the relay total for that process barely grows, that data is being sent over UDP, which is outside what this program handles (see [section 10](#10-known-limitations)).
 
-## 实测数据
+---
 
-测试环境：Windows 11，Clash Verge 2.5.8（Mihomo Meta v1.19.32），TUN 开启。上传目标是本机的 HTTP 接收端，用改名后的 `curl.exe` 模拟目标进程。
+## 9. Test results
 
-| 测试 | 结果 |
+Environment: Windows 11; Clash Verge 2.5.8 (Mihomo Meta v1.19.32) with TUN on. The upload target was an HTTP sink on the same machine, and a renamed `curl.exe` stood in for the target process.
+
+| Test | Result |
 |---|---|
-| 规则 100 KB/s，上传 500 KB | 4.78 秒（理论值 4.75 秒） |
-| 规则 50 KB/s，中文进程名，经 mihomo 进程规则转入，上传 500 KB | 9.76 秒（理论值 9.75 秒） |
-| 同一规则下载 5 MB | 0.02 秒，不受限 |
-| 规则未启用，或用户名没有对应规则 | 照常转发，不限速 |
-| 不带用户名连接中转 | 被拒绝 |
-| 不在代理规则里的进程 | 按原有规则走，不经过中转 |
-| ProcTamer 退出后 | 健康检查失败，同一进程自动改走直连 |
-| TUN 开启时代理连接 `127.0.0.1:17877` | 健康检查通过，延迟 50–74 ms |
+| Rule at 100 KB/s, upload 500 KB | 4.78 s (theoretical 4.75 s) |
+| Rule at 50 KB/s, non-ASCII process name, routed in by a mihomo process rule, upload 500 KB | 9.76 s (theoretical 9.75 s) |
+| Download 5 MB under the same rule | 0.02 s, not limited |
+| Rule disabled, or username with no rule | Forwarded, not limited |
+| Connection to the relay without a username | Refused |
+| Process not listed in the proxy rules | Handled by the existing rules, does not pass through the relay |
+| After ProcTamer exits | Health check fails; the same process goes DIRECT automatically |
+| Proxy connecting to `127.0.0.1:17877` with TUN on | Health check passes |
+| Sync to Clash: 24 checks covering the blank template, existing content, list changes, removal, CRLF files and more | All pass; after removal the file is byte-for-byte identical to the original |
 
-理论值的算法：`(数据量 − 桶容量) ÷ 速率`。例如 `(500000 − 25000) ÷ 100000 = 4.75` 秒。
+Theoretical time: `(data size − bucket capacity) ÷ rate`. For example `(500000 − 25000) ÷ 100000 = 4.75` s.
 
-尚未充分实测的部分，请知悉：
+The following have not been tested thoroughly, and this is stated for the record:
 
-- "注册表优先级"和系统 QoS 限速需要管理员权限，目前只做过功能实现，没有在真实反作弊进程上做长时间验证；
-- 对战平台真实对局中的限速效果，取决于它的上传走 TCP 还是 UDP。
+- Registry priority and system QoS limiting need administrator rights. They are implemented but have not been validated over long periods against real protected processes.
+- The click-through flow of the "Sync to Clash" button has not been covered by automated UI tests. The write and remove logic it calls, and the automatic update at startup, have been tested.
+- The effect on any particular piece of software depends on whether its uploads use TCP or UDP.
 
-## 已知限制
+---
 
-- **只管 TCP。** UDP 流量不经过中转，仍按代理原有规则走，不限速。
-- **经中转的进程一律直连出网。** 这些进程的 TCP 由 ProcTamer 直接发出，不再按代理订阅里的域名规则分流。原本会走代理节点的连接也会变成直连。
-- **退出时有短暂空窗。** ProcTamer 退出后到代理下一次健康检查之间（最长约 30 秒），这些进程的新连接会失败，之后自动回落直连；退出时已建立的中转连接会断开。
-- **健康检查会留下痕迹。** 代理每 30 秒检查一次中转是否可用，状态列里会偶尔出现 1 个连接和少量累计流量，这是正常的。
-- **改了名单要让 Clash 重新加载。** 用"同步到 Clash"时脚本会自动更新，但 Clash Verge 只在重新生成配置时才读脚本，仍需手动点一次"使用"。手动安装脚本的话，进程名单要两边都改。
-- **"同步到 Clash"只认 Clash Verge。** 它按固定路径找 Clash Verge 的全局扩展脚本，其他客户端请手写配置。进程名里带逗号或括号的不会写进名单（规则语法不允许）。
-- **注册表优先级不即时生效。** 只对之后启动的进程有效，要在启动游戏前设置好。
-- **异常退出不会还原。** 程序被强制结束或系统崩溃时来不及清理：QoS 策略重启后自动消失；注册表项会保留，下次启动 ProcTamer 时按配置重新同步。
-- **系统 QoS 在部分家用环境下可能不生效。** 这是 Windows 策略式 QoS 本身的特性，状态列显示 `限速✔` 只代表策略已建立，是否真的压住了上行请用资源监视器确认。
+## 10. Known limitations
 
-## 风险提示
+1. **TCP only.** UDP traffic does not pass through the relay; it follows the proxy's existing rules and is not limited.
+2. **Relayed processes always go out DIRECT.** Their TCP connections are sent by ProcTamer itself and are no longer split by the domain rules of the subscription. Connections that used to go through a proxy node become direct as well.
+3. **A list change needs a manual reload.** Clash Verge reads the script only when it regenerates the configuration, and the program cannot trigger that.
+4. **Sync to Clash supports Clash Verge only.** It looks for the global script at a fixed path. For other clients, write the configuration by hand.
+5. **There is a short gap on exit.** Between ProcTamer exiting and the proxy's next health check (up to about 30 seconds), new connections from the affected processes fail; after that they fall back to DIRECT.
+6. **Health checks leave small traces.** The proxy checks every 30 seconds whether the relay is available, so the status column occasionally shows one connection and a small total. This is normal.
+7. **Registry priority is not immediate.** It affects only processes started afterwards.
+8. **Priority is restored to Normal, not to the original value.** If a process originally used a different priority class, it will be at Normal after the rule is disabled.
+9. **No restore after an abnormal exit.** See [5.8](#58-exit-and-restore), clause 3.
+10. **System QoS may not take effect in some home environments.** This is a property of Windows policy-based QoS itself. `限速✔` in the status column only means the policy exists; use Resource Monitor to confirm the actual effect.
+11. **The interface is in Simplified Chinese only.**
 
-- 本工具会降低反作弊、对战平台等程序的优先级并限制其网络。这些做法**没有任何官方许可依据**，平台方是否把它视为异常行为无法保证。
-- 限速值设得过低，可能导致平台数据传不完、连接超时，后果未知（例如被判定掉线）。建议从 100 KB/s 这样较宽松的值开始。
-- ProcTamer 不修改游戏、不读写其他进程的内存、不拦截或伪造任何数据，只调整优先级和转发速度。但使用后果由使用者自行承担。
+---
 
-## 退出、还原与卸载
+## 11. Risks and disclaimer
 
-托盘右键"退出并还原"时会依次：
+1. This program can be used to lower the priority of, and limit the network of, security software, anti-cheat programs, matchmaking platforms and similar. Doing so **is not sanctioned by the vendors of that software**, and this project cannot guarantee that they will not treat it as abnormal behaviour.
+2. A limit set too low may leave the restrained program unable to finish its transfers or cause its connections to time out. The consequences, for example being judged as disconnected, cannot be predicted. Start with a generous value such as 100 KB/s.
+3. Lowering the priority of security software may lengthen its scan and response times. Assess this yourself.
+4. The program does not modify any third-party program, does not read or write its memory, and does not intercept or forge any data. It only adjusts priority and forwarding rate.
+5. The program is provided "as is", without warranty of any kind, express or implied. All consequences of using it rest with the user. See [LICENSE](LICENSE).
 
-1. 关闭本机中转；
-2. 把处理过的进程恢复为普通优先级；
-3. 删除本程序写入的注册表项（只删带标记的）；
-4. 删除所有 `ProcTamer_*` QoS 策略。
+---
 
-卸载：
+## 12. Uninstalling and checking for leftovers
 
-1. 如果开过"开机自启"，先在程序里点一次把它关掉（或在任务计划程序里删除名为 `ProcTamer` 的任务）；
-2. 如果用过"同步到 Clash"，再点一次把那一段移除（手动装的脚本则自己恢复成默认内容），并到 Clash Verge 点一次"使用"；
-3. 退出并还原；
-4. 删除程序所在目录。
+To uninstall:
 
-手动检查是否有残留（管理员 PowerShell）：
+1. If autostart is on, click the button once in the program to turn it off (or delete the task named `ProcTamer` in Task Scheduler).
+2. If Sync to Clash is on, click it again to turn it off (for a manually installed script, restore the default content yourself), then click "Use" once in Clash Verge.
+3. Choose "退出并还原" (Exit and restore) from the tray menu.
+4. Delete the program's folder.
+
+To check for leftovers (administrator PowerShell):
 
 ```powershell
 Get-NetQosPolicy -PolicyStore ActiveStore | Where-Object Name -like 'ProcTamer_*'
@@ -404,23 +509,25 @@ Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Exe
     Where-Object { (Get-ItemProperty "$($_.PSPath)\PerfOptions" -ErrorAction SilentlyContinue).ProcTamer }
 ```
 
-三条命令都没有输出就是干净的。
+If none of the three commands prints anything, nothing is left behind.
 
-## 从源码构建与修改
+---
 
-### 文件
+## 13. Building and development
 
-| 文件 | 说明 |
+### 13.1 Files
+
+| File | Description |
 |---|---|
-| `ProcTamer.cs` | 全部源码，单文件 |
-| `app.manifest` | 清单：普通权限启动、DPI 感知、新版控件样式 |
-| `build.cmd` | 一键构建脚本 |
-| `proctamer-relay.js` | Clash Verge 全局扩展脚本的独立版本，供手动安装 |
-| `rules.tsv` | 运行后自动生成的配置文件（不在仓库里） |
+| `ProcTamer.cs` | All of the source code, in one file |
+| `app.manifest` | Application manifest: starts with standard rights, DPI aware, modern control styles |
+| `build.cmd` | One-step build script |
+| `proctamer-relay.js` | Standalone version of the Clash Verge global script, for manual installation |
+| `rules.tsv` | Rule file generated at run time (not in the repository) |
 
-### 构建
+### 13.2 Building
 
-`build.cmd` 实际执行的是：
+`build.cmd` runs:
 
 ```bat
 "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /platform:x64 ^
@@ -428,39 +535,41 @@ Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Exe
   /r:System.dll,System.Core.dll,System.Drawing.dll,System.Windows.Forms.dll ProcTamer.cs
 ```
 
-修改源码时注意：
+When changing the source, note:
 
-- 系统自带的这个编译器只支持到 **C# 5**。不能用字符串内插（`$"..."`）、`?.`、`out var`、表达式体成员、`nameof` 等更新的语法；`async` / `await` 可以用，但 `catch` / `finally` 里不能 `await`。
-- 源码是 UTF-8 编码，所以构建参数里有 `/codepage:65001`。
-- `build.cmd` 必须保持 **CRLF** 换行，否则 cmd 会把中文注释的一部分当成命令执行。仓库的 `.gitattributes` 已做了约束。
-- 程序运行时 exe 被占用，重新构建前要先退出。
+- The compiler that ships with Windows supports only up to **C# 5**. String interpolation (`$"..."`), `?.`, `out var`, expression-bodied members, `nameof` and other newer syntax are unavailable. `async` / `await` can be used, but not inside `catch` / `finally` blocks.
+- The source is UTF-8, hence `/codepage:65001` in the build arguments.
+- `build.cmd` must keep **CRLF** line endings; otherwise cmd executes part of a non-ASCII comment as a command. The repository's `.gitattributes` enforces this.
+- The executable is locked while the program runs. Exit it before rebuilding.
 
-### 配置文件格式
+### 13.3 Rule file format
 
-`rules.tsv` 与 exe 放在同一目录，UTF-8 编码，每行一条规则，用制表符分隔：
-
-```
-启用	进程名	效能模式	注册表优先级	限速KB/s
-```
-
-布尔值用 `1` / `0`。例如：
+`rules.tsv` sits next to the executable, is UTF-8 encoded, and has one rule per line with tab-separated fields:
 
 ```
-1	5EClient.exe	0	0	100
+enabled	process name	efficiency mode	registry priority	limit KB/s
 ```
 
-删除这个文件再启动，就会恢复成预设规则。
+Booleans are `1` / `0`. Example:
 
-### 命令行参数
+```
+1	example.exe	0	0	100
+```
 
-| 参数 | 作用 |
+Delete the file and restart to return to the preset rules.
+
+### 13.4 Command-line arguments
+
+| Argument | Effect |
 |---|---|
-| `--tray` | 启动后不显示窗口，直接进托盘（开机自启用的就是它） |
-| `--wait` | 等待上一个实例退出后再启动（提权重启时内部使用） |
-| `--shot <png路径>` | 调试用：启动后把窗口画成图片保存并退出，不占用单实例锁 |
-| `--shot-after <毫秒>` | 配合 `--shot`，指定多久之后截图，默认 1500。不要和 `--tray` 同用 |
-| `--clash-dir <目录>` | 指定 Clash Verge 的数据目录（里面要有 `profiles\Script.js`），默认是 `%APPDATA%\io.github.clash-verge-rev.clash-verge-rev`。`--shot` 模式下不指定就不碰 Clash 的文件 |
+| `--tray` | Start without showing the window, straight to the tray (this is what autostart uses) |
+| `--wait` | Wait for the previous instance to exit before starting (used internally when restarting elevated) |
+| `--clash-dir <folder>` | Clash Verge data folder to use (it must contain `profiles\Script.js`). Defaults to `%APPDATA%\io.github.clash-verge-rev.clash-verge-rev` |
+| `--shot <png path>` | Debugging: after startup, render the window to an image, save it and exit, without taking the single-instance lock. In this mode Clash files are not read or written unless `--clash-dir` is given |
+| `--shot-after <ms>` | With `--shot`, how long to wait before the screenshot; default 1500. Do not combine with `--tray` |
 
-## License
+---
 
-[MIT](LICENSE)
+## 14. License
+
+Released under the [MIT License](LICENSE).
