@@ -97,8 +97,10 @@ ProcTamer 是一款 Windows 托盘工具，用于按进程名称约束后台程�
 
 ### 3.2 快速开始
 
-1. 下载本仓库（`Code → Download ZIP` 后解压，或 `git clone`）。
-2. 双击 `build.cmd`，在同一目录生成 `ProcTamer.exe`。
+1. 取得 `ProcTamer.exe`，二选一：
+   - 从 [Releases 页面](https://github.com/WaziXuan/ProcTamer/releases/latest)下载，放入单独的文件夹；或
+   - 下载本仓库（`Code → Download ZIP` 后解压，或 `git clone`），双击 `build.cmd`，在同一目录生成 `ProcTamer.exe`。
+2. 发布的可执行文件未经代码签名，首次运行时 Windows SmartScreen 可能给出提示；自行构建则无此提示。
 3. 运行 `ProcTamer.exe`。首次运行载入预设规则，**全部默认不启用**。
 4. 在需要约束的进程所在行勾选"启用"，按需勾选功能或填写限速值。
 5. 需要使用"注册表优先级"、系统 QoS 限速或开机自启时，点击工具栏的"以管理员身份重启"。

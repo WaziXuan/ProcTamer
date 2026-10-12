@@ -97,8 +97,10 @@ The "upload limit KB/s" value is shared by both limiting methods: system QoS enf
 
 ### 3.2 Quick start
 
-1. Download this repository (`Code → Download ZIP` and extract it, or `git clone`).
-2. Double-click `build.cmd`. It produces `ProcTamer.exe` in the same folder.
+1. Get `ProcTamer.exe`, either way:
+   - download it from the [Releases page](https://github.com/WaziXuan/ProcTamer/releases/latest) and put it in a folder of its own; or
+   - download this repository (`Code → Download ZIP` and extract it, or `git clone`) and double-click `build.cmd`, which produces `ProcTamer.exe` in the same folder.
+2. The release executable is not code-signed, so Windows SmartScreen may show a warning the first time. Building it yourself avoids that.
 3. Run `ProcTamer.exe`. The first run loads the preset rules, **all disabled by default**.
 4. Tick "Enabled" on the rows you want, then tick features or enter an upload limit as needed.
 5. To use registry priority, system QoS limiting or autostart, click "Restart as administrator" on the toolbar.
