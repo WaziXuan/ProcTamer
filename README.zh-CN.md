@@ -282,7 +282,17 @@ ProcTamer 本机中转 127.0.0.1:17877 ── 令牌桶限制上传
 ### 6.2 方式一：同步到 Clash（推荐，适用于 Clash Verge）
 
 1. 在 ProcTamer 工具栏点击"同步到 Clash"并确认。
-2. 在 Clash Verge 的订阅（Profiles）页，对当前订阅点击一次"使用"，使其重新生成配置。
+2. 在 Clash Verge 的订阅页，右键当前订阅并点击一次"使用"，使其重新生成配置。
+
+本节涉及的 Clash Verge 界面名称（以 2.5.8 版为准）：
+
+| 中文界面 | 英文界面 | 位置 |
+|---|---|---|
+| 订阅 | Profiles | 导航栏 |
+| 使用 | Select | 订阅的右键菜单 |
+| 全局扩展脚本 | Global Extend Script | 订阅页 |
+| 扩展脚本 | Extend Script | 订阅的右键菜单（订阅级脚本） |
+| 规则 / 代理 / 连接 | Rules / Proxies / Connections | 导航栏 |
 
 此后的操作与是否需要重新加载的对应关系如下：
 
@@ -311,7 +321,7 @@ function main(config, profileName) {
 
 如不希望由本程序改写 Clash Verge 的文件，可手动安装。仓库中的 [`proctamer-relay.js`](proctamer-relay.js) 为独立版本，效果与方式一生成的标记段完全相同。
 
-1. 打开 Clash Verge → 订阅（Profiles）页 → "全局扩展脚本"（Global Extend Script）。不同版本的菜单文字可能略有差异。
+1. 打开 Clash Verge → 订阅页 → "全局扩展脚本"。
 2. 先将原有内容另存备份，再以 `proctamer-relay.js` 的内容整体替换并保存。
 3. Clash Verge 将重新生成配置。未生效时，对当前订阅再点击一次"使用"。
 
@@ -361,6 +371,8 @@ rules:
 | 规则 | `PROCESS-NAME,ProcTamer.exe,DIRECT` | 置于最前，确保本程序发出的连接不被再次转回中转 |
 
 策略组类型为 `fallback`：**ProcTamer 未运行时健康检查失败，流量自动改走直连**，不会造成断网。
+
+Clash Verge 按固定顺序应用各项扩展：订阅原文 → 应用设置 → 全局扩展配置 → 全局扩展脚本 → 订阅扩展配置 → 订阅扩展脚本 → 应用设置回写。因此全局脚本先于订阅级脚本执行；订阅级脚本如在最前面插入自己的规则，这些规则会排在本程序所加规则之上。
 
 ### 6.6 撤销
 
