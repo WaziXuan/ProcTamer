@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -19,6 +20,38 @@ using Microsoft.Win32;
 
 namespace ProcTamer
 {
+    // 界面文字有中英两套，在用到的地方成对书写：L.T("中文", "English")
+    static class L
+    {
+        public static bool En;
+        public static string Choice;   // "zh" / "en"；null = 跟随系统显示语言
+
+        public static void Set(string choice)
+        {
+            Choice = choice == "zh" || choice == "en" ? choice : null;
+            En = Choice != null ? Choice == "en"
+                : !CultureInfo.CurrentUICulture.Name.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // 语言选择记在规则文件里单独的一行。程序一启动就要用到，所以不等主窗口读配置
+        public static void Load(string configPath)
+        {
+            string choice = null;
+            try
+            {
+                foreach (string line in File.ReadAllLines(configPath, Encoding.UTF8))
+                {
+                    string[] f = line.Split('\t');
+                    if (f.Length == 2 && f[0] == "#lang") choice = f[1].Trim();
+                }
+            }
+            catch { }
+            Set(choice);
+        }
+
+        public static string T(string zh, string en) { return En ? en : zh; }
+    }
+
     class Rule
     {
         public bool Enabled;
@@ -81,7 +114,7 @@ namespace ProcTamer
     // TUN 模式下系统自带的按进程限速全部失效，所以改在这里限
     class Relay
     {
-        public const int Port = 17877;
+        public static int Port = 17877;
         const int HandshakeMs = 10000;
         const int ConnectMs = 10000;
         const int GraceMs = 60000;
@@ -479,7 +512,7 @@ namespace ProcTamer
                 if (!text.Replace(block, "").Contains("procTamerRelay("))
                 {
                     Match m = MainHead.Match(text);
-                    if (!m.Success) return "脚本里没找到 main 函数";
+                    if (!m.Success) return L.T("脚本里没找到 main 函数", "no main function found in the script");
                     text = text.Insert(m.Index + m.Length, nl + "  " + Call);
                 }
                 if (text == old) return null;
@@ -598,21 +631,21 @@ namespace ProcTamer
 
         public AddDialog(Font font)
         {
-            Text = "添加进程";
+            Text = L.T("添加进程", "Add process");
             Font = font;
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(380, 120);
+            ClientSize = new Size(440, 120);
 
             Label lb = new Label();
-            lb.Text = "从运行中的进程里选，或直接输入程序名（如 xxx.exe）：";
-            lb.SetBounds(12, 12, 356, 20);
+            lb.Text = L.T("从运行中的进程里选，或直接输入程序名（如 xxx.exe）：", "Pick a running process, or type an executable name (e.g. xxx.exe):");
+            lb.SetBounds(12, 12, 416, 20);
 
             box = new ComboBox();
-            box.SetBounds(12, 38, 356, 26);
+            box.SetBounds(12, 38, 416, 26);
             box.DropDownStyle = ComboBoxStyle.DropDown;
             box.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
             box.AutoCompleteSource = AutoCompleteSource.ListItems;
@@ -625,14 +658,14 @@ namespace ProcTamer
             box.Items.AddRange(names.OrderBy(delegate(string n) { return n; }, StringComparer.OrdinalIgnoreCase).ToArray());
 
             Button ok = new Button();
-            ok.Text = "添加"; ok.SetBounds(196, 80, 82, 28);
+            ok.Text = L.T("添加", "Add"); ok.SetBounds(256, 80, 82, 28);
             ok.Click += delegate
             {
                 string t = box.Text.Trim();
                 if (t.Length == 0) return;
                 if (t.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
                 {
-                    MessageBox.Show(this, "只填程序名，不要带路径。", Text);
+                    MessageBox.Show(this, L.T("只填程序名，不要带路径。", "Enter the executable name only, without a path."), Text);
                     return;
                 }
                 if (!t.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) t += ".exe";
@@ -640,7 +673,7 @@ namespace ProcTamer
                 DialogResult = DialogResult.OK;
             };
             Button cancel = new Button();
-            cancel.Text = "取消"; cancel.SetBounds(286, 80, 82, 28);
+            cancel.Text = L.T("取消", "Cancel"); cancel.SetBounds(346, 80, 82, 28);
             cancel.DialogResult = DialogResult.Cancel;
 
             Controls.AddRange(new Control[] { lb, box, ok, cancel });
@@ -676,10 +709,11 @@ namespace ProcTamer
         bool reallyExit;
 
         DataGridView grid;
-        ToolStripButton btnPause, btnAuto, btnClash, btnElevate;
+        ToolStripButton btnAdd, btnDel, btnPause, btnAuto, btnClash, btnElevate;
         ToolStripStatusLabel lblStatus;
         NotifyIcon tray;
-        ToolStripMenuItem miPause;
+        ToolStripMenuItem miShow, miPause, miLang, miLangAuto, miLangZh, miLangEn, miExit;
+        float dpiScale;
         System.Windows.Forms.Timer timer;
         Icon icoOn, icoPaused, icoLimited;
 
@@ -734,11 +768,12 @@ namespace ProcTamer
 
         void BuildUi()
         {
-            Text = AppName + (isAdmin ? "" : "（非管理员）");
             Font = new Font("Microsoft YaHei UI", 9F);
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(860, 380);
+            // 窗口大小不会随 DPI 自动放大，这里和列宽一样按比例手动放大
+            using (Graphics g = CreateGraphics()) dpiScale = g.DpiX / 96F;
+            ClientSize = new Size((int)((L.En ? 1120 : 980) * dpiScale), (int)(380 * dpiScale));
             MinimumSize = new Size(700, 260);
             StartPosition = FormStartPosition.CenterScreen;
             Icon = icoOn;
@@ -747,23 +782,21 @@ namespace ProcTamer
             bar.GripStyle = ToolStripGripStyle.Hidden;
             bar.RenderMode = ToolStripRenderMode.System;
             bar.Padding = new Padding(6, 4, 6, 4);
-            ToolStripButton add = TextButton("添加进程");
-            add.Click += delegate { AddRule(); };
-            ToolStripButton del = TextButton("删除");
-            del.Click += delegate { DeleteRule(); };
-            btnPause = TextButton("暂停全部");
+            btnAdd = TextButton("");
+            btnAdd.Click += delegate { AddRule(); };
+            btnDel = TextButton("");
+            btnDel.Click += delegate { DeleteRule(); };
+            btnPause = TextButton("");
             btnPause.Click += delegate { TogglePause(); };
-            btnAuto = TextButton("开机自启");
-            btnAuto.ToolTipText = "登录后以管理员权限静默启动到托盘";
+            btnAuto = TextButton("");
             btnAuto.Click += delegate { ToggleAutostart(); };
-            btnClash = TextButton("同步到 Clash");
-            btnClash.ToolTipText = "把限上传大于 0 的进程写进 Clash Verge 全局扩展脚本里 ProcTamer 自己的那一段，之后规则变化会自动更新；再点一次移除";
+            btnClash = TextButton("");
             btnClash.Click += delegate { ToggleClash(); };
-            btnElevate = TextButton("以管理员身份重启");
+            btnElevate = TextButton("");
             btnElevate.Visible = !isAdmin;
             btnElevate.Click += delegate { RestartElevated(); };
             bar.Items.AddRange(new ToolStripItem[] {
-                add, del, new ToolStripSeparator(), btnPause, new ToolStripSeparator(), btnAuto, btnClash, btnElevate });
+                btnAdd, btnDel, new ToolStripSeparator(), btnPause, new ToolStripSeparator(), btnAuto, btnClash, btnElevate });
 
             grid = new DataGridView();
             grid.Dock = DockStyle.Fill;
@@ -785,24 +818,21 @@ namespace ProcTamer
             grid.DefaultCellStyle.SelectionForeColor = Color.Black;
             grid.ShowCellToolTips = true;
 
-            float s;
-            using (Graphics g = CreateGraphics()) s = g.DpiX / 96F;
-            grid.RowTemplate.Height = (int)(28 * s);
-            grid.ColumnHeadersHeight = (int)(30 * s);
+            grid.RowTemplate.Height = (int)(28 * dpiScale);
+            grid.ColumnHeadersHeight = (int)(30 * dpiScale);
 
-            grid.Columns.Add(CheckCol("启用", 50, s, "勾上这条规则才生效"));
+            // 列的标题、宽度和提示在 ApplyLanguage 里设置
+            grid.Columns.Add(new DataGridViewCheckBoxColumn());
             DataGridViewTextBoxColumn name = new DataGridViewTextBoxColumn();
-            name.HeaderText = "进程"; name.ReadOnly = true; name.Width = (int)(190 * s);
+            name.ReadOnly = true;
             grid.Columns.Add(name);
-            grid.Columns.Add(CheckCol("效能模式", 76, s, "检测到进程运行时设为：低优先级 + 效能模式 + 极低 I/O 优先级"));
-            grid.Columns.Add(CheckCol("注册表优先级", 96, s, "让系统在进程启动时直接给低优先级。用于会“拒绝访问”的反作弊进程，对下次启动的进程生效"));
+            grid.Columns.Add(new DataGridViewCheckBoxColumn());
+            grid.Columns.Add(new DataGridViewCheckBoxColumn());
             DataGridViewTextBoxColumn kb = new DataGridViewTextBoxColumn();
-            kb.HeaderText = "限上传 KB/s"; kb.Width = (int)(92 * s);
-            kb.ToolTipText = "0 = 不限速";
             kb.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
             grid.Columns.Add(kb);
             DataGridViewTextBoxColumn st = new DataGridViewTextBoxColumn();
-            st.HeaderText = "状态"; st.ReadOnly = true;
+            st.ReadOnly = true;
             st.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
             st.DefaultCellStyle.ForeColor = Color.FromArgb(90, 90, 90);
             grid.Columns.Add(st);
@@ -828,13 +858,21 @@ namespace ProcTamer
             Controls.Add(status);
 
             ContextMenuStrip menu = new ContextMenuStrip();
-            ToolStripMenuItem miShow = new ToolStripMenuItem("显示主窗口");
+            miShow = new ToolStripMenuItem();
             miShow.Click += delegate { ShowWindow(); };
-            miPause = new ToolStripMenuItem("暂停全部");
+            miPause = new ToolStripMenuItem();
             miPause.Click += delegate { TogglePause(); };
-            ToolStripMenuItem miExit = new ToolStripMenuItem("退出并还原");
+            miLangAuto = new ToolStripMenuItem();
+            miLangAuto.Click += delegate { SetLanguage(null); };
+            miLangZh = new ToolStripMenuItem("中文");
+            miLangZh.Click += delegate { SetLanguage("zh"); };
+            miLangEn = new ToolStripMenuItem("English");
+            miLangEn.Click += delegate { SetLanguage("en"); };
+            miLang = new ToolStripMenuItem("语言 / Language");
+            miLang.DropDownItems.AddRange(new ToolStripItem[] { miLangAuto, miLangZh, miLangEn });
+            miExit = new ToolStripMenuItem();
             miExit.Click += delegate { ExitApp(); };
-            menu.Items.AddRange(new ToolStripItem[] { miShow, miPause, new ToolStripSeparator(), miExit });
+            menu.Items.AddRange(new ToolStripItem[] { miShow, miPause, miLang, new ToolStripSeparator(), miExit });
 
             tray = new NotifyIcon();
             tray.ContextMenuStrip = menu;
@@ -842,6 +880,62 @@ namespace ProcTamer
             tray.Text = AppName;
             tray.Visible = shotPath == null;
             tray.DoubleClick += delegate { ShowWindow(); };
+
+            ApplyLanguage();
+        }
+
+        // 固定的界面文字都在这里设置，切换语言时重新执行一遍。状态列和状态栏的文字由 RefreshStatus 生成
+        void ApplyLanguage()
+        {
+            Text = AppName + (isAdmin ? "" : L.T("（非管理员）", " (not administrator)"));
+            btnAdd.Text = L.T("添加进程", "Add process");
+            btnDel.Text = L.T("删除", "Delete");
+            btnAuto.Text = L.T("开机自启", "Autostart");
+            btnAuto.ToolTipText = L.T("登录后以管理员权限静默启动到托盘",
+                "Start silently to the tray with administrator rights at logon");
+            btnClash.Text = L.T("同步到 Clash", "Sync to Clash");
+            btnClash.ToolTipText = L.T(
+                "把限上传大于 0 的进程写进 Clash Verge 全局扩展脚本里 ProcTamer 自己的那一段，之后规则变化会自动更新；再点一次移除",
+                "Write the processes that have an upload limit into ProcTamer's own block of Clash Verge's global script and keep it updated as rules change; click again to remove it");
+            btnElevate.Text = L.T("以管理员身份重启", "Restart as administrator");
+
+            SetColumn(ColEnabled, L.T("启用", "Enabled"), L.En ? 64 : 50,
+                L.T("勾上这条规则才生效", "The rule applies only while this is ticked"));
+            SetColumn(ColName, L.T("进程", "Process"), 170, "");
+            SetColumn(ColEco, L.T("效能模式", "Efficiency mode"), L.En ? 112 : 76,
+                L.T("检测到进程运行时设为：低优先级 + 效能模式 + 极低 I/O 优先级",
+                    "While the process runs: low priority + efficiency mode + very low I/O priority"));
+            SetColumn(ColIfeo, L.T("注册表优先级", "Registry priority"), L.En ? 116 : 96,
+                L.T("让系统在进程启动时直接给低优先级。用于会“拒绝访问”的反作弊进程，对下次启动的进程生效",
+                    "Make Windows start the process at low priority. For protected processes that deny access; applies the next time the process starts"));
+            SetColumn(ColKbps, L.T("限上传 KB/s", "Upload limit KB/s"), L.En ? 128 : 92, L.T("0 = 不限速", "0 = unlimited"));
+            grid.Columns[ColStatus].HeaderText = L.T("状态", "Status");
+
+            miShow.Text = L.T("显示主窗口", "Show window");
+            miExit.Text = L.T("退出并还原", "Exit and restore");
+            miLangAuto.Text = L.T("跟随系统", "Follow system");
+            miLangAuto.Checked = L.Choice == null;
+            miLangZh.Checked = L.Choice == "zh";
+            miLangEn.Checked = L.Choice == "en";
+        }
+
+        void SetColumn(int index, string header, int width, string tip)
+        {
+            DataGridViewColumn c = grid.Columns[index];
+            c.HeaderText = header;
+            c.Width = (int)(width * dpiScale);
+            c.ToolTipText = tip;
+        }
+
+        void SetLanguage(string choice)
+        {
+            L.Set(choice);
+            SaveConfig();
+            ApplyLanguage();
+            // 英文的列标题和状态文字更长，窗口太窄就放宽一些
+            int want = (int)(1120 * dpiScale);
+            if (L.En && ClientSize.Width < want) ClientSize = new Size(want, ClientSize.Height);
+            ApplyAll(false);
         }
 
         static ToolStripButton TextButton(string text)
@@ -850,15 +944,6 @@ namespace ProcTamer
             b.DisplayStyle = ToolStripItemDisplayStyle.Text;
             b.Padding = new Padding(6, 2, 6, 2);
             return b;
-        }
-
-        static DataGridViewCheckBoxColumn CheckCol(string header, int width, float scale, string tip)
-        {
-            DataGridViewCheckBoxColumn c = new DataGridViewCheckBoxColumn();
-            c.HeaderText = header;
-            c.Width = (int)(width * scale);
-            c.ToolTipText = tip;
-            return c;
         }
 
         static Icon MakeIcon(Color c)
@@ -959,11 +1044,12 @@ namespace ProcTamer
         void SaveConfig()
         {
             StringBuilder sb = new StringBuilder();
+            if (L.Choice != null) sb.AppendLine("#lang\t" + L.Choice);
             foreach (Rule r in rules)
                 sb.AppendLine(string.Join("\t", new string[] {
                     r.Enabled ? "1" : "0", r.Name, r.Eco ? "1" : "0", r.Ifeo ? "1" : "0", r.Kbps.ToString() }));
             try { File.WriteAllText(configPath, sb.ToString(), new UTF8Encoding(false)); }
-            catch (Exception ex) { lblStatus.Text = "配置保存失败：" + ex.Message; }
+            catch (Exception ex) { lblStatus.Text = L.T("配置保存失败：", "Could not save the configuration: ") + ex.Message; }
         }
 
         void FillGrid()
@@ -1006,7 +1092,7 @@ namespace ProcTamer
                 foreach (Rule x in rules)
                     if (string.Equals(x.Name, d.Result, StringComparison.OrdinalIgnoreCase))
                     {
-                        MessageBox.Show(this, "列表里已经有 " + d.Result + " 了。", AppName);
+                        MessageBox.Show(this, L.T("列表里已经有 " + d.Result + " 了。", d.Result + " is already in the list."), AppName);
                         return;
                     }
                 rules.Add(Preset(d.Result, true, false, 0));
@@ -1019,7 +1105,7 @@ namespace ProcTamer
         {
             if (grid.CurrentRow == null) return;
             Rule r = (Rule)grid.CurrentRow.Tag;
-            if (MessageBox.Show(this, "删除 " + r.Name + " 这条规则？", AppName,
+            if (MessageBox.Show(this, L.T("删除 " + r.Name + " 这条规则？", "Delete the rule for " + r.Name + "?"), AppName,
                     MessageBoxButtons.OKCancel) != DialogResult.OK) return;
             if (isAdmin) SetIfeo(r.Name, false);
             relay.Entry(r.Name).Rate = 0;
@@ -1070,26 +1156,33 @@ namespace ProcTamer
         {
             if (ClashSync.Dir == null)
             {
-                MessageBox.Show(this, "没找到 Clash Verge 的全局扩展脚本（profiles\\Script.js），可能没装 Clash Verge。\n" +
-                    "用别的代理软件时，请参考 proctamer-relay.js 手动配置。", AppName);
+                MessageBox.Show(this, L.T(
+                    "没找到 Clash Verge 的全局扩展脚本（profiles\\Script.js），可能没装 Clash Verge。\n" +
+                    "用别的代理软件时，请参考 proctamer-relay.js 手动配置。",
+                    "Clash Verge's global script (profiles\\Script.js) was not found; Clash Verge may not be installed.\n" +
+                    "For other proxy software, see proctamer-relay.js and configure it by hand."), AppName);
                 return;
             }
             string err;
             if (!ClashSync.Installed())
             {
-                if (MessageBox.Show(this, "把限上传大于 0 的进程写进 Clash Verge 的全局扩展脚本？\n\n" +
+                if (MessageBox.Show(this, L.T(
+                        "把限上传大于 0 的进程写进 Clash Verge 的全局扩展脚本？\n\n" +
                         "只会增加和维护 ProcTamer 自己的那一段，脚本里别的内容不动；原文件会先备份。\n" +
-                        "之后在这里增减进程或改限速值，那一段会自动更新。", AppName,
+                        "之后在这里增减进程或改限速值，那一段会自动更新。",
+                        "Write the processes that have an upload limit into Clash Verge's global script?\n\n" +
+                        "Only ProcTamer's own block is added and maintained. The rest of the script is left alone, and the original file is backed up first.\n" +
+                        "Afterwards, adding or removing processes or changing limits here updates that block automatically."), AppName,
                         MessageBoxButtons.OKCancel) != DialogResult.OK) return;
                 err = ClashSync.Write(RelayNames());
             }
             else
             {
-                if (MessageBox.Show(this, "从 Clash Verge 的全局扩展脚本里移除 ProcTamer 的那一段？", AppName,
+                if (MessageBox.Show(this, L.T("从 Clash Verge 的全局扩展脚本里移除 ProcTamer 的那一段？", "Remove ProcTamer's block from Clash Verge's global script?"), AppName,
                         MessageBoxButtons.OKCancel) != DialogResult.OK) return;
                 err = ClashSync.Remove();
             }
-            if (err != null) MessageBox.Show(this, "写入失败：" + err, AppName);
+            if (err != null) MessageBox.Show(this, L.T("写入失败：", "Write failed: ") + err, AppName);
             ApplyAll(false);
         }
 
@@ -1140,9 +1233,9 @@ namespace ProcTamer
                     p.Dispose();
                 }
                 if (!act || ps.Length == 0) r.EcoState = "";
-                else if (fail == 0) r.EcoState = "效能✔";
-                else if (ok == 0) r.EcoState = "效能✘ 拒绝访问";
-                else r.EcoState = "效能 部分✔";
+                else if (fail == 0) r.EcoState = L.T("效能✔", "Eco ✔");
+                else if (ok == 0) r.EcoState = L.T("效能✘ 拒绝访问", "Eco ✘ access denied");
+                else r.EcoState = L.T("效能 部分✔", "Eco partly ✔");
             }
             Restore(keep);
             RefreshStatus();
@@ -1175,13 +1268,13 @@ namespace ProcTamer
             foreach (Rule r in rules)
             {
                 bool want = Active(r) && r.Ifeo;
-                if (!isAdmin) { r.IfeoState = want ? "注册表✘ 需管理员" : ""; continue; }
+                if (!isAdmin) { r.IfeoState = want ? L.T("注册表✘ 需管理员", "Registry ✘ needs admin") : ""; continue; }
                 try
                 {
                     bool done = SetIfeo(r.Name, want);
-                    r.IfeoState = !want ? "" : done ? "注册表✔" : "注册表✘ 已有其他设置";
+                    r.IfeoState = !want ? "" : done ? L.T("注册表✔", "Registry ✔") : L.T("注册表✘ 已有其他设置", "Registry ✘ other settings exist");
                 }
-                catch (Exception ex) { r.IfeoState = want ? "注册表✘ " + ex.Message : ""; }
+                catch (Exception ex) { r.IfeoState = want ? L.T("注册表✘ ", "Registry ✘ ") + ex.Message : ""; }
             }
         }
 
@@ -1303,13 +1396,13 @@ namespace ProcTamer
             {
                 Rule r = (Rule)row.Tag;
                 string text;
-                if (!r.Enabled) text = "未启用";
-                else if (paused) text = "已暂停";
+                if (!r.Enabled) text = L.T("未启用", "Disabled");
+                else if (paused) text = L.T("已暂停", "Paused");
                 else
                 {
                     activeCount++;
                     List<string> parts = new List<string>();
-                    parts.Add(r.Running == 0 ? "未运行" : "运行中×" + r.Running);
+                    parts.Add(r.Running == 0 ? L.T("未运行", "Not running") : L.T("运行中×", "Running ×") + r.Running);
                     if (r.EcoState.Length > 0) parts.Add(r.EcoState);
                     if (r.IfeoState.Length > 0) parts.Add(r.IfeoState);
                     RelayEntry re = relay.Entry(r.Name);
@@ -1319,41 +1412,51 @@ namespace ProcTamer
                         limiting = true;
                         if (tunnel != null)
                         {
-                            if (relay.Error != null) parts.Add("限速✘ 中转未启动");
-                            else if (!relayed) parts.Add("限速✘ 流量走 " + tunnel + "（TUN），等待中转连接");
+                            if (relay.Error != null) parts.Add(L.T("限速✘ 中转未启动", "Limit ✘ relay not started"));
+                            else if (!relayed) parts.Add(L.T("限速✘ 流量走 " + tunnel + "（TUN），等待中转连接",
+                                "Limit ✘ traffic goes via " + tunnel + " (TUN), waiting for relay connections"));
                         }
-                        else if (!isAdmin) { if (!relayed) parts.Add("限速✘ 需管理员"); }
-                        else if (qosPending) parts.Add("限速 设置中…");
-                        else parts.Add(qosOn.Contains(r.Name) ? "限速✔ " + r.Kbps + "KB/s" : "限速✘ 未生效");
+                        else if (!isAdmin) { if (!relayed) parts.Add(L.T("限速✘ 需管理员", "Limit ✘ needs admin")); }
+                        else if (qosPending) parts.Add(L.T("限速 设置中…", "Limit: applying…"));
+                        else parts.Add(qosOn.Contains(r.Name)
+                            ? L.T("限速✔ " + r.Kbps + "KB/s", "Limit ✔ " + r.Kbps + " KB/s")
+                            : L.T("限速✘ 未生效", "Limit ✘ not in effect"));
                     }
                     if (relayed)
-                        parts.Add("中转 " + re.Conns + " 连接  ↑ " + (r.RelayRate / 1e3).ToString("0.#") + " KB/s" +
-                            (r.Kbps > 0 ? "（限 " + r.Kbps + "）" : "（不限）") + "  累计 " + FormatSize(Interlocked.Read(ref re.Total)));
+                        parts.Add(L.T("中转 " + re.Conns + " 连接 ↑", "Relay " + re.Conns + " conn ↑") + (r.RelayRate / 1e3).ToString("0.#") + " KB/s" +
+                            (r.Kbps > 0 ? L.T("（限 " + r.Kbps + "）", " (limit " + r.Kbps + ")") : L.T("（不限）", " (unlimited)")) +
+                            L.T("累计 ", ", total ") + FormatSize(Interlocked.Read(ref re.Total)));
                     text = string.Join("  ·  ", parts.ToArray());
                 }
                 if (!text.Equals(row.Cells[ColStatus].Value)) row.Cells[ColStatus].Value = text;
             }
             loading = false;
 
-            string state = paused ? "已暂停" : activeCount + " 条规则生效中";
-            btnPause.Text = paused ? "恢复全部" : "暂停全部";
+            string state = paused ? L.T("已暂停", "Paused")
+                : L.T(activeCount + " 条规则生效中", activeCount + (activeCount == 1 ? " rule active" : " rules active"));
+            btnPause.Text = paused ? L.T("恢复全部", "Resume all") : L.T("暂停全部", "Pause all");
             btnClash.Checked = clashOn;
             miPause.Text = btnPause.Text;
             if (limiting && relay.Error != null)
-                lblStatus.Text = state + "    限速中转未启动（127.0.0.1:" + Relay.Port + " 监听失败：" + relay.Error + "）";
+                lblStatus.Text = state + L.T("    限速中转未启动（127.0.0.1:" + Relay.Port + " 监听失败：" + relay.Error + "）",
+                    "    Relay not started (cannot listen on 127.0.0.1:" + Relay.Port + ": " + relay.Error + ")");
             else if (clashError != null)
-                lblStatus.Text = state + "    Clash 脚本写入失败：" + clashError;
+                lblStatus.Text = state + L.T("    Clash 脚本写入失败：", "    Could not write the Clash script: ") + clashError;
             else if (clashOn && ClashSync.Pending())
-                lblStatus.Text = state + "    Clash 规则已更新：到 Clash Verge 订阅页对当前订阅点一次“使用”后生效";
+                lblStatus.Text = state + L.T("    Clash 规则已更新：到 Clash Verge 订阅页对当前订阅点一次“使用”后生效",
+                    "    Clash rules updated: in Clash Verge's Profiles page, choose \"Select\" on the current profile to apply them");
             else if (limiting && tunnel != null && clashOn)
-                lblStatus.Text = state + "    检测到代理 TUN 模式：限上传由本机中转 127.0.0.1:" + Relay.Port + " 执行，Clash 规则已同步";
+                lblStatus.Text = state + L.T("    检测到代理 TUN 模式：限上传由本机中转 127.0.0.1:" + Relay.Port + " 执行，Clash 规则已同步",
+                    "    Proxy TUN mode detected: upload limits are enforced by the local relay 127.0.0.1:" + Relay.Port + "; Clash rules are in sync");
             else if (limiting && tunnel != null && ClashSync.Dir != null)
-                lblStatus.Text = state + "    检测到代理 TUN 模式：点“同步到 Clash”，让 Clash 把限速进程的 TCP 转给本机中转";
+                lblStatus.Text = state + L.T("    检测到代理 TUN 模式：点“同步到 Clash”，让 Clash 把限速进程的 TCP 转给本机中转",
+                    "    Proxy TUN mode detected: click \"Sync to Clash\" so that Clash sends the limited processes' TCP to the local relay");
             else if (limiting && tunnel != null)
-                lblStatus.Text = state + "    检测到代理 TUN 模式：限上传由本机中转 127.0.0.1:" + Relay.Port +
-                    " 执行，需要代理软件把这些进程的 TCP 转过来";
+                lblStatus.Text = state + L.T("    检测到代理 TUN 模式：限上传由本机中转 127.0.0.1:" + Relay.Port + " 执行，需要代理软件把这些进程的 TCP 转过来",
+                    "    Proxy TUN mode detected: upload limits are enforced by the local relay 127.0.0.1:" + Relay.Port + "; the proxy must send these processes' TCP to it");
             else
-                lblStatus.Text = state + (isAdmin ? "" : "    当前不是管理员：注册表优先级和系统 QoS 限上传不可用（经中转的限上传不受影响），效能模式只对普通进程有效");
+                lblStatus.Text = state + (isAdmin ? "" : L.T("    当前不是管理员：注册表优先级和系统 QoS 限上传不可用（经中转的限上传不受影响），效能模式只对普通进程有效",
+                    "    Not administrator: no registry priority or system QoS limiting (relay limiting still works); efficiency mode for ordinary processes only"));
             Icon ico = paused ? icoPaused : (isAdmin ? icoOn : icoLimited);
             if (tray.Icon != ico) { tray.Icon = ico; Icon = ico; }
             tray.Text = AppName + " - " + state;
@@ -1388,7 +1491,8 @@ namespace ProcTamer
         {
             if (!isAdmin)
             {
-                MessageBox.Show(this, "设置开机自启需要管理员权限，请先点“以管理员身份重启”。", AppName);
+                MessageBox.Show(this, L.T("设置开机自启需要管理员权限，请先点“以管理员身份重启”。",
+                    "Setting autostart needs administrator rights. Click \"Restart as administrator\" first."), AppName);
                 return;
             }
             string exe = Application.ExecutablePath.Replace("'", "''");
@@ -1431,6 +1535,12 @@ namespace ProcTamer
             string shot = null;
             int si = Array.IndexOf(args, "--shot");
             if (si >= 0 && si + 1 < args.Length) shot = args[si + 1];
+            L.Load(Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "rules.tsv"));
+            // 调试参数：--lang 临时指定界面语言（不保存），--relay-port 换一个中转端口
+            int li = Array.IndexOf(args, "--lang");
+            if (li >= 0 && li + 1 < args.Length) L.En = args[li + 1] == "en";
+            int pi = Array.IndexOf(args, "--relay-port");
+            if (pi >= 0 && pi + 1 < args.Length) int.TryParse(args[pi + 1], out Relay.Port);
             string clashDir = null;
             int ci = Array.IndexOf(args, "--clash-dir");
             if (ci >= 0 && ci + 1 < args.Length) clashDir = args[ci + 1];
@@ -1452,7 +1562,8 @@ namespace ProcTamer
                     }
                     if (!got)
                     {
-                        MessageBox.Show("ProcTamer 已经在运行，请看任务栏右下角的托盘图标。", "ProcTamer");
+                        MessageBox.Show(L.T("ProcTamer 已经在运行，请看任务栏右下角的托盘图标。",
+                            "ProcTamer is already running. Look for its icon in the notification area."), "ProcTamer");
                         return;
                     }
                 }

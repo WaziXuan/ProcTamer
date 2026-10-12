@@ -6,15 +6,15 @@ ProcTamer is a Windows tray utility that restrains background programs by proces
 
 Its distinguishing feature: **the per-process upload limit keeps working while a proxy runs in TUN mode** (with Clash Verge / mihomo). In that situation none of the per-process rate limiting mechanisms built into Windows have any effect.
 
-- A single executable of about 60 KB. No driver, no injection into other processes, and it never suspends or terminates anything
+- A single executable of about 68 KB. No driver, no injection into other processes, and it never suspends or terminates anything
 - Uses only facilities that ship with Windows; builds from source with the compiler that is already on the system, no development environment required
 - Reverts every change it made when it exits
 
 ![Main window: two rules being rate limited through the relay](docs/screenshot.png)
 
-*A demonstration: two processes are capped at 100 KB/s and 50 KB/s. The status column shows the live connection count, upload rate and running total.*
+*A demonstration with stand-in programs: one is capped at 100 KB/s, another at 50 KB/s with efficiency mode on. The status column shows the live connection count, upload rate and running total.*
 
-> **Note on language.** The user interface is in Simplified Chinese only. Section 4 gives an English key for every label.
+The interface is available in **English and Simplified Chinese** and follows the system language by default.
 
 ---
 
@@ -100,9 +100,9 @@ The "upload limit KB/s" value is shared by both limiting methods: system QoS enf
 1. Download this repository (`Code → Download ZIP` and extract it, or `git clone`).
 2. Double-click `build.cmd`. It produces `ProcTamer.exe` in the same folder.
 3. Run `ProcTamer.exe`. The first run loads the preset rules, **all disabled by default**.
-4. Tick the first column ("启用", Enabled) on the rows you want, then tick features or enter an upload limit as needed.
-5. To use registry priority, system QoS limiting or autostart, click "以管理员身份重启" (Restart as administrator) on the toolbar.
-6. If your proxy normally runs in TUN mode, click "同步到 Clash" (Sync to Clash) on the toolbar, then, in Clash Verge's Profiles page, right-click the current profile and choose "Select" once. See [section 6](#6-configuration-for-tun-mode).
+4. Tick "Enabled" on the rows you want, then tick features or enter an upload limit as needed.
+5. To use registry priority, system QoS limiting or autostart, click "Restart as administrator" on the toolbar.
+6. If your proxy normally runs in TUN mode, click "Sync to Clash" on the toolbar, then, in Clash Verge's Profiles page, right-click the current profile and choose "Select" once. See [section 6](#6-configuration-for-tun-mode).
 
 ### 3.3 Preset rules
 
@@ -124,44 +124,48 @@ Delete any preset you do not need.
 
 ### 4.1 Columns
 
-| Label | English | Meaning |
-|---|---|---|
-| 启用 | Enabled | Master switch for the rule. When unticked, nothing else on the row applies |
-| 进程 | Process | Executable name without a path, case-insensitive |
-| 效能模式 | Efficiency mode | While the process runs, set it to low priority, efficiency mode and very low I/O priority |
-| 注册表优先级 | Registry priority | Register "start this program at low priority" in the registry. Affects only processes started afterwards |
-| 限上传 KB/s | Upload limit KB/s | Upload rate ceiling; `0` means unlimited. 1 KB is 1000 bytes |
-| 状态 | Status | What the rule is actually doing right now; see 4.2 |
+| Column | Meaning |
+|---|---|
+| Enabled | Master switch for the rule. When unticked, nothing else on the row applies |
+| Process | Executable name without a path, case-insensitive |
+| Efficiency mode | While the process runs, set it to low priority, efficiency mode and very low I/O priority |
+| Registry priority | Register "start this program at low priority" in the registry. Affects only processes started afterwards |
+| Upload limit KB/s | Upload rate ceiling; `0` means unlimited. 1 KB is 1000 bytes |
+| Status | What the rule is actually doing right now; see 4.2 |
 
 ### 4.2 Status column
 
 | Text shown | Meaning |
 |---|---|
-| `未启用` / `已暂停` | Not enabled / paused: the rule is not in effect |
-| `未运行` / `运行中×3` | Not running / running, with the number of instances |
-| `效能✔` | Efficiency mode applied |
-| `效能✘ 拒绝访问` | Access denied: the process is protected. Use registry priority instead |
-| `注册表✔` | Registry entry written; takes effect the next time the process starts |
-| `注册表✘ 需管理员` | Administrator rights required |
-| `注册表✘ 已有其他设置` | The program already has priority settings from another source; ProcTamer does not overwrite them |
-| `限速✔ 100KB/s` | System QoS policy created |
-| `限速✘ 流量走 Meta（TUN），等待中转连接` | TUN detected, so system QoS has no effect, and no connection has reached the relay yet (the proxy rules are not in place, or the process is not using the network) |
-| `限速✘ 中转未启动` | The relay could not listen on local port 17877; the status bar gives the reason |
-| `中转 2 连接  ↑ 37.5 KB/s（限 100）  累计 1.2 MB` | Being forwarded through the relay: connection count, current upload rate (and the limit), total uploaded |
+| `Disabled` / `Paused` | The rule is not in effect |
+| `Not running` / `Running ×3` | Number of instances of the process right now |
+| `Eco ✔` | Efficiency mode applied |
+| `Eco ✘ access denied` | The process is protected and cannot be adjusted. Use registry priority instead |
+| `Registry ✔` | Registry entry written; takes effect the next time the process starts |
+| `Registry ✘ needs admin` | Not running as administrator |
+| `Registry ✘ other settings exist` | The program already has priority settings from another source; ProcTamer does not overwrite them |
+| `Limit ✔ 100 KB/s` | System QoS policy created |
+| `Limit ✘ traffic goes via Meta (TUN), waiting for relay connections` | TUN detected, so system QoS has no effect, and no connection has reached the relay yet (the proxy rules are not in place, or the process is not using the network) |
+| `Limit ✘ relay not started` | The relay could not listen on local port 17877; the status bar gives the reason |
+| `Relay 2 conn ↑37.5 KB/s (limit 100), total 1.2 MB` | Being forwarded through the relay: connection count, current upload rate and its limit, total uploaded |
 
 ### 4.3 Toolbar and tray
 
-| Label | English | Effect |
-|---|---|---|
-| 添加进程 | Add process | Adds a rule. Pick from the running processes or type an executable name |
-| 删除 | Delete | Deletes the selected rule |
-| 暂停全部 / 恢复全部 | Pause all / Resume all | Suspends or resumes every rule. While paused the relay keeps forwarding without limiting |
-| 开机自启 | Autostart | Registers or removes start at logon (administrator rights, silently to the tray) |
-| 同步到 Clash | Sync to Clash | Turns synchronisation with Clash Verge's global script on or off. Highlighted when on |
-| 以管理员身份重启 | Restart as administrator | Shown only when not running as administrator |
-| Tray icon | — | Green: running. Grey: paused. Orange: not administrator. Double-click to show the window |
+| Control | Effect |
+|---|---|
+| Add process | Adds a rule. Pick from the running processes or type an executable name |
+| Delete | Deletes the selected rule |
+| Pause all / Resume all | Suspends or resumes every rule. While paused the relay keeps forwarding without limiting |
+| Autostart | Registers or removes start at logon (administrator rights, silently to the tray) |
+| Sync to Clash | Turns synchronisation with Clash Verge's global script on or off. Highlighted when on |
+| Restart as administrator | Shown only when not running as administrator |
+| Tray icon | Green: running. Grey: paused. Orange: not administrator. Double-click to show the window |
 
-Closing the window only hides it to the tray. **"退出并还原" (Exit and restore) in the tray menu is what actually exits.**
+Closing the window only hides it to the tray. **"Exit and restore" in the tray menu is what actually exits.**
+
+### 4.4 Interface language
+
+The interface is available in English and Simplified Chinese. By default it follows the Windows display language: Chinese on a Chinese system, English otherwise. To choose explicitly, right-click the tray icon → "语言 / Language" → "Follow system", "中文" or "English". The change applies immediately and is remembered.
 
 ---
 
@@ -283,7 +287,7 @@ Physical adapter → Internet
 
 ### 6.2 Option 1: Sync to Clash (recommended, for Clash Verge)
 
-1. Click "同步到 Clash" (Sync to Clash) on the ProcTamer toolbar and confirm.
+1. Click "Sync to Clash" on the ProcTamer toolbar and confirm.
 2. In Clash Verge's Profiles page, right-click the current profile and choose "Select" so the configuration is regenerated.
 
 The Clash Verge labels used in this section, as they appear in version 2.5.8:
@@ -473,6 +477,7 @@ The following have not been tested thoroughly, and this is stated for the record
 
 - Registry priority and system QoS limiting need administrator rights. They are implemented but have not been validated over long periods against real protected processes.
 - The click-through flow of the "Sync to Clash" button has not been covered by automated UI tests. The write and remove logic it calls, and the automatic update at startup, have been tested.
+- Switching the language from the tray menu while the program is running has not been covered by automated tests. Language selection at startup, both by system language and by the saved setting, has been tested.
 - The effect on any particular piece of software depends on whether its uploads use TCP or UDP.
 
 ---
@@ -488,8 +493,7 @@ The following have not been tested thoroughly, and this is stated for the record
 7. **Registry priority is not immediate.** It affects only processes started afterwards.
 8. **Priority is restored to Normal, not to the original value.** If a process originally used a different priority class, it will be at Normal after the rule is disabled.
 9. **No restore after an abnormal exit.** See [5.8](#58-exit-and-restore), clause 3.
-10. **System QoS may not take effect in some home environments.** This is a property of Windows policy-based QoS itself. `限速✔` in the status column only means the policy exists; use Resource Monitor to confirm the actual effect.
-11. **The interface is in Simplified Chinese only.**
+10. **System QoS may not take effect in some home environments.** This is a property of Windows policy-based QoS itself. `Limit ✔` in the status column only means the policy exists; use Resource Monitor to confirm the actual effect.
 
 ---
 
@@ -509,7 +513,7 @@ To uninstall:
 
 1. If autostart is on, click the button once in the program to turn it off (or delete the task named `ProcTamer` in Task Scheduler).
 2. If Sync to Clash is on, click it again to turn it off (for a manually installed script, restore the default content yourself), then choose "Select" on the current profile once in Clash Verge.
-3. Choose "退出并还原" (Exit and restore) from the tray menu.
+3. Choose "Exit and restore" from the tray menu.
 4. Delete the program's folder.
 
 To check for leftovers (administrator PowerShell):
@@ -568,6 +572,8 @@ Booleans are `1` / `0`. Example:
 1	example.exe	0	0	100
 ```
 
+If a language has been chosen explicitly, the file also contains one line of the form `#lang<TAB>en` or `#lang<TAB>zh`.
+
 Delete the file and restart to return to the preset rules.
 
 ### 13.4 Command-line arguments
@@ -577,6 +583,8 @@ Delete the file and restart to return to the preset rules.
 | `--tray` | Start without showing the window, straight to the tray (this is what autostart uses) |
 | `--wait` | Wait for the previous instance to exit before starting (used internally when restarting elevated) |
 | `--clash-dir <folder>` | Clash Verge data folder to use (it must contain `profiles\Script.js`). Defaults to `%APPDATA%\io.github.clash-verge-rev.clash-verge-rev` |
+| `--lang <en\|zh>` | Use this interface language for this run only, without saving it |
+| `--relay-port <port>` | Debugging: listen on a different relay port. The generated Clash script still refers to 17877 |
 | `--shot <png path>` | Debugging: after startup, render the window to an image, save it and exit, without taking the single-instance lock. In this mode Clash files are not read or written unless `--clash-dir` is given |
 | `--shot-after <ms>` | With `--shot`, how long to wait before the screenshot; default 1500. Do not combine with `--tray` |
 
